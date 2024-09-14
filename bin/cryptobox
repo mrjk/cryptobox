@@ -441,7 +441,7 @@ patch_file() {
   # Ensure destination exists
   if [[ ! -f "$file" ]]; then
 
-    local parent=$(dirname "${$file}")
+    local parent=$(dirname "${file}")
     if [[-z "$parent" ]] && [[ ! -d "$parent" ]]; then
       _log INFO "Create missing parent directory: $parent"
       ensure_dir "$parent"
