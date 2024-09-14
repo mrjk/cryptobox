@@ -519,9 +519,6 @@ $stop_delimiter"
 # DB Commands
 # =================
 
-# APP_DB_FILE=directory.ini
-# APP_DB_FILE_ENC=directory.ini
-
 
 # VALIDATED
 _db ()
@@ -778,18 +775,6 @@ keyring_get_best_secret ()
     secret-tool lookup "${APP_NAME}-ident" "$ident" 2>/dev/null || true
   fi
 
-
-  # if [[ -n "$live_secret" ]]; then
-  #   APP_USER_IDENTITY_CRYPT_TARGET=$live_secret
-  # else
-  #   if [[ -f "$APP_USER_IDENTITY_CLEAR_FILE" ]]; then
-  #     APP_USER_IDENTITY_CRYPT_TARGET=$(cat "$APP_USER_IDENTITY_CLEAR_FILE")
-  #   elif [[ -f "$APP_USER_IDENTITY_CRYPT_FILE" ]]; then
-  #     APP_USER_IDENTITY_CRYPT_TARGET=$APP_USER_IDENTITY_CRYPT_FILE
-  #   # else
-
-  #   fi
-  # fi
 }
 
 
@@ -1332,40 +1317,6 @@ data_init ()
 }
 
 
-# # Init app
-# data_init_DEPRECATED ()
-# {
-
-#   # export PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-#   export PROJECT_ROOT=$PWD
-
-#   [[ -d "$PROJECT_ROOT" ]] \
-#     || _die 1 "Can't find project root. Are you in a git repo ?"
-
-
-#   cd "$PROJECT_ROOT"
-
-#   export APP_DATA_DIR="${PROJECT_ROOT}"
-#   export APP_IDENT_DIR="${APP_DATA_DIR}/identities"
-#   export APP_INV_DIR="${APP_DATA_DIR}/directory"
-
-#   export APP_VAULTS_DIR="${APP_DATA_DIR}/vaults"
-#   export APP_STORES_DIR="${APP_DATA_DIR}/stores"
-
-#   export APP_USER_STORE_DIR=
-
-#   export APP_CURR_ID_FILE="$APP_DATA_DIR/.curr_ident"
-#   export APP_GITATTR_FILE="$APP_DATA_DIR/.gitattributes"
-
-#   # mkdir -p "$APP_IDENT_DIR"
-#   # mkdir -p "$APP_INV_DIR"
-#   # mkdir -p "$APP_STORES_DIR"
-
-#   export APP_CURR_IDENT=
-
-# }
-
-
 # VALIDATED
 load_ident ()
 {
@@ -1432,38 +1383,6 @@ load_ident_password ()
   export APP_IDENT_PUB_KEY=$(echo "$private_key" | age-keygen -y)
 
 }
-
-# DEPRECATED
-# load_ident_v1 ()
-# {
-#   local ident=${1:-$(cat "$APP_CURR_ID_FILE" 2>/dev/null || true)}
-
-#   export APP_CURR_IDENT=$ident
-#   export APP_CURR_IDENT_HASH=$( hash_sum "$ident" )
-#   export APP_USER_STORE_DIR="${APP_STORES_DIR}/$APP_CURR_IDENT"
-#   export APP_USER_IDENTITY_CLEAR_FILE="${APP_IDENT_DIR}/$APP_CURR_IDENT"
-#   export APP_USER_IDENTITY_CRYPT_FILE="${APP_IDENT_DIR}/$APP_CURR_IDENT.age"
-#   export APP_USER_IDENTITY_CRYPT_PASS=
-
-#   # DEPRECATED
-#   # export APP_USER_PUB_FILE="${APP_INV_DIR}/$APP_CURR_IDENT.pub"
-#   export APP_USER_PUB_FILE="${APP_INV_DIR}/$APP_CURR_IDENT_HASH.pub"
-#   # mkdir -p "$APP_USER_STORE_DIR"
-
-#   _log INFO "Current id loaded: $APP_CURR_IDENT"
-
-
-
-#   # export APP_USER_IDENTITY_FILE="${APP_IDENT_DIR}/$APP_CURR_IDENT.age"
-#   export APP_USER_IDENTITY_FILE="${APP_IDENT_DIR}/$APP_CURR_IDENT_HASH.age"
-#   export APP_USER_IDENTITY_CRYPT_TARGET=
-
-#   # echo TEST
-#   keyring_get_best_secret "$APP_CURR_IDENT"
-
-#   assert_current_ident
-# }
-
 
 
 
@@ -1535,8 +1454,6 @@ dir_lib_decrypt_meta ()
     --output "$APP_CONFIG_FILE" "$vaulted_file"
 
 }
-
-
 
 
 cli__lock ()
@@ -1619,7 +1536,7 @@ cli__decrypt ()
   : "FILE,Decrypt a file"
   local file=$1
   # load_ident
-  _age_decrypt_file "$file" $2 #"$APP_USER_IDENTITY_FILE"
+  _age_decrypt_file "$file" $2
 }
 
 cli__encrypt ()
@@ -1695,10 +1612,6 @@ cli__id ()
 
   _db_ensure_open
 
-  # report to user
-  # _log INFO "Requested mod: $mode"
-  # _log INFO "Requested message: $msg"
-
   # Dispatch to sub commands
   clish_dispatch cli__id__ "$@" || _die $?
 }
@@ -1746,12 +1659,6 @@ cli__id__ls()
 
   lib_id_list
 
-  # lib_id_as_vars
-
-  # local idents_raw=${!db__ident__*}
-
-  # echo "IDENTS: $idents_raw"
-
 }
 
 cli__id__keypair()
@@ -1789,57 +1696,6 @@ cli__id__keyring ()
 
   _log INFO "Identity has been added to keyring"
 }
-
-
-# cli__id__current()
-# {
-#   : "[NAME],Check if current id is enabled"
-#   local curr=${IDENT:-}
-#   ret=1
-#   if [[ "$APP_CURR_IDENT" == "$curr" ]]; then
-#     ret=0
-#   fi
-#   _die $ret "Current id is: ${curr:-<NONE>}"
-# }
-
-
-# # Nested command names
-# # ---------------
-# cli__id__var ()
-# {
-#   : "," # Ignored from help
-#   clish_dispatch cli__id__var__ "$@" \
-#     || _die $? "id command failed with error: $?" 
-# }
-
-# cli__id__var__get()
-# {
-#   : "VAR,Get variable"
-#   echo "Value of var $1 is current date: $(date)"
-# }
-
-# cli__id__var__set()
-# {
-#   : "VAR VALUE,Set variable value"
-#   local name=$1
-#   shift
-#   [ $# -gt 0 ] || return 42
-#   echo "Value of var '$name' set to: $@"
-# }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1906,75 +1762,13 @@ cli__vault ()
 
   _db_ensure_open
 
-  # report to user
-  # _log INFO "Requested mod: $mode"
-  # _log INFO "Requested message: $msg"
-
   # Dispatch to sub commands
   clish_dispatch cli__vault__ "$@" || _die $?
 }
 
 
-
-# LIB VAULT
-# ---------------
-
-# create_empy_vault ()
-# {
-#     local store_dir=$(mktemp -u -d) # "$STORE_DIR/$name"
-#     ensure_dir "$store_dir"
-#     echo "Hello Crypt" >> "$store_dir/README.md"
-
-#     tar -czf - -C "$store_dir" . | age -e -o "$vault_file" -R "$vault_file"
-#     rm -rf "$store_dir"
-
-# }
-
-
-# # Function to open a vault
-# open_vault() {
-#     local name="$1"
-#     local vault_file="$VAULTS_DIR/${name}.age"
-#     local store_dir="$STORE_DIR/$name"
-
-#     if [[ ! -f "$vault_file" ]]; then
-#         echo "Error: Vault '$name' does not exist." >&2
-#         return 1
-#     fi
-
-#     mkdir -p "$store_dir"
-#     age -d -o - "$vault_file" | tar -xz -C "$store_dir"
-#     echo "Vault '$name' opened successfully."
-# }
-
-# # Function to close a vault
-# close_vault() {
-#     local name="$1"
-#     local vault_file="$VAULTS_DIR/${name}.age"
-#     local store_dir="$STORE_DIR/$name"
-
-#     if [[ ! -d "$store_dir" ]]; then
-#         echo "Error: Vault '$name' is not open." >&2
-#         return 1
-#     fi
-
-#     # Get recipients
-
-
-#     tar -czf - -C "$store_dir" . | age -e -o "$vault_file" -R "$vault_file"
-#     rm -rf "$store_dir"
-#     echo "Vault '$name' closed successfully."
-# }
-
-
 # Basic simple level sub-commands
 # ---------------
-
-# cli__vault__set()
-# {
-#   : "NAME [VALUE],Add subcommand"
-#   echo "Add: '$1' in '$mode' mode with message: '$msg'"
-# }
 
 cli__vault__new()
 {
