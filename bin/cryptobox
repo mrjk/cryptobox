@@ -10,6 +10,10 @@
 # * Return code support
 # * Command executor with dry mode
 
+
+# shellcheck disable=SC2155
+
+
 set -euo pipefail
 
 # App Global variable
@@ -169,7 +173,7 @@ _confirm() {
   >&2 printf "%s" "([y]es or [N]o): "
   export REPLY=
 
-  >&2 read REPLY
+  >&2 read -r REPLY
   case $(tr '[A-Z]' '[a-z]' <<<"$REPLY") in
   y | yes)
     # printf "%s\n" "true"
@@ -187,7 +191,7 @@ _input() {
   local msg="Please enter input:"
   local default=${2-}
   >&2 printf "%s" "${1:-$msg}${default:+ [$default]}: "
-  >&2 read REPLY
+  >&2 read -r REPLY
   [[ -n "$REPLY" ]] || REPLY=${default}
   printf "%s\n" "$REPLY"
 }
@@ -201,7 +205,7 @@ _input2() {
 
   while $status; do
     >&2 printf "%s" "${msg}${default:+ [$default]}: "
-    >&2 read REPLY
+    >&2 read -r REPLY
     [[ -n "$REPLY" ]] || REPLY=${default}
     status=false
   done
@@ -216,7 +220,7 @@ _input_pass() {
 
   while $status; do
     >&2 printf "%s" "${msg}: "
-    >&2 read -s REPLY
+    >&2 read -s -r REPLY
 
     >&2 echo ""
     if [[ -z "$REPLY" ]]; then
@@ -241,7 +245,7 @@ clish_dispatch() {
   local prefix=$1
   local cmd=${2-}
   shift 2 || true
-  [ ! -z "$cmd" ] || _die 3 "Missing command name, please check usage"
+  [ -n "$cmd" ] || _die 3 "Missing command name, please check usage"
 
   if [[ $(type -t "${prefix}${cmd}") == function ]]; then
     "${prefix}${cmd}" "$@"
@@ -304,7 +308,7 @@ clish_help_msg() {
 clish_help() {
   : ",Show this help"
   local func=${1:-cli}
-  local commands= options= message= output=
+  local commands='' options='' message='' output=''
 
   # Help message
   message=$(clish_help_msg $func)
@@ -312,7 +316,7 @@ clish_help() {
   # Fetch command options
   options=$(
     while IFS=, read -r flags meta desc _; do
-      if [ ! -z "${flags:-}" ]; then
+      if [ -n "${flags:-}" ]; then
         printf "  %-16s  %-20s  %s\n" "$flags" "$meta" "$desc"
       fi
     done <<<"$(clish_help_options $func)"
@@ -321,7 +325,7 @@ clish_help() {
   # Fetch sub command informations
   commands=$(
     while IFS=, read -r flags meta desc _; do
-      if [ ! -z "${flags:-}" ]; then
+      if [ -n "${flags:-}" ]; then
         printf "  %-16s  %-20s  %s\n" "$flags" "$meta" "$desc"
       fi
     done <<<"$(clish_help_subcommands ${func}__)"
@@ -393,7 +397,7 @@ patch_file() {
   if [[ ! -f "$file" ]]; then
 
     local parent=$(dirname "${file}")
-    if [[-z "$parent" ]] && [[ ! -d "$parent" ]]; then
+    if [[ -z "$parent" ]] && [[ ! -d "$parent" ]]; then
       _log INFO "Create missing parent directory: $parent"
       ensure_dir "$parent"
     fi
@@ -410,7 +414,7 @@ $stop_delimiter"
   if grep -q "$start_delimiter" "$file" && grep -q "$stop_delimiter" "$file"; then
 
     # Delimiters exist, check if update is needed
-    local current_content= content_before= content_after=
+    local current_content='' content_before='' content_after=''
 
     # Calculate line indexes
     local line_sof=1
@@ -585,6 +589,7 @@ _age_encrypt_file() {
 
   local dest=${3:-$file}
 
+  # shellcheck disable=SC2086
   cat "$file" | age --encrypt \
     --armor \
     --recipient ${recipient//,/ --recipient } \
@@ -606,7 +611,7 @@ _age_decrypt_file() {
 
 _age_public_key_from_private_key() {
   local file=$1
-  local priv_key= pub_key=
+  local priv_key='' pub_key=''
 
   priv_key=$(age --decrypt "$file" 2>/dev/null)
   echo "$priv_key" | age-keygen -y
@@ -758,6 +763,7 @@ get_id_file_of_ident() {
 # Load dump into shell
 lib_id_as_vars() {
   # Reset env
+  # shellcheck disable=SC2086
   unset ${!db_ident__*} || true
 
   # Load
@@ -844,7 +850,6 @@ lib_id_new_ident__age() {
 # Remove identity
 lib_id_rm_ident__age() {
   local ident=$1
-  local rm_keys=
   local changed=false
 
   load_ident "$ident"
@@ -914,7 +919,7 @@ vault_assert_exists() {
 # Return all recipients ids for a given vault
 vault_ident_names() {
   local vault_name=$1
-  _dir_db get vault.$vault_name.recipient |
+  _dir_db get "vault.$vault_name.recipient" |
     sort -u
 }
 
@@ -962,10 +967,10 @@ lib_vault_new() {
   local vault_hash=$(hash_sum "$vault_name")
 
   # Save in DB
-  _dir_db set vault.$vault_name.store-hash "$vault_hash"
+  _dir_db set "vault.$vault_name.store-hash" "$vault_hash"
   for ident in $idents; do
     [[ -n "$ident" ]] || continue
-    _dir_db add vault.$vault_name.recipient "$ident"
+    _dir_db add "vault.$vault_name.recipient" "$ident"
     valid=true
   done
 
@@ -988,15 +993,16 @@ lib_vault_rm() {
 
   # Build vars
   local vault_hash=$(_dir_db get "vault.$vault_name.store-hash")
-  local vault_enc="$APP_STORES_DIR/$vault_hash.age" local vault_dir="$APP_VAULTS_DIR/$vault_name"
+  local vault_enc="$APP_STORES_DIR/$vault_hash.age"
+  local vault_dir="$APP_VAULTS_DIR/$vault_name"
 
   # Sanity checks
   [[ -n "$vault_hash" ]] || _die 1 "Could not get vault store hash"
 
   # Clear encrypted file
   if [[ -f "$vault_enc" ]]; then
-    _log INFO "Delete encrypted vault file: $vault_file"
-    rm "$vault_file"
+    _log INFO "Delete encrypted vault file: $vault_enc"
+    rm "$vault_enc"
     changed=true
   fi
 
@@ -1069,6 +1075,7 @@ lib_vault_push() {
     _log DEBUG "Changes detected in vault, rencrypting data"
     if ! $APP_DRY; then
       _dir_db set "vault.$vault_name.checksum" "$content_checksum"
+      # shellcheck disable=SC2086
       tar -czf - -C "$vault_dir" . | age --encrypt --armor -output "$vault_enc" $age_recipient_args
       ret=$?
     else
@@ -1082,15 +1089,19 @@ lib_vault_push() {
 
 # Push changes and clean
 lib_vault_lock() {
-  lib_vault_push "$@"
+  local vault_name=$1
+
+  local ret=''
+  lib_vault_push "$vault_name"
+  ret=$?
 
   # Validate
-  [[ "$?" -eq "0" ]] ||
-    _die 1 "Some errors happened, did not remove local data!"
+  [[ "$ret" -eq "0" ]] ||
+    _die "$ret" "Some errors happened, did not remove local data!"
 
   # Cleanup
-  _exec rm -rf "$vault_dir"
-  _log INFO "Vault '$vault_name' closed successfully $changed."
+  _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
+  _log INFO "Vault '$vault_name' closed successfully."
 
 }
 
@@ -1194,7 +1205,7 @@ load_ident() {
 
   # User personal vault
   export APP_IDENT_VAULT_NAME="ident_$ident_name"
-  export APP_IDENT_VAULT_HASH=$(hash_sum "ident_$ident_name")
+  export APP_IDENT_VAULT_HASH=$(hash_sum "$APP_IDENT_VAULT_NAME")
   export APP_IDENT_VAULT_FILE_ENC="${APP_STORES_DIR}/${APP_IDENT_VAULT_HASH}.age"
 
   # User best passowrd
@@ -1229,8 +1240,8 @@ load_ident_password() {
   [[ -n "$private_key" ]] ||
     _die 1 "Could not read user private key ..."
 
-  export APP_IDENT_PRIV_KEY=$private_key
-  export APP_IDENT_PUB_KEY=$(echo "$private_key" | age-keygen -y)
+  APP_IDENT_PRIV_KEY=$private_key
+  APP_IDENT_PUB_KEY=$(echo "$private_key" | age-keygen -y)
 
 }
 
@@ -1257,12 +1268,13 @@ dir_lib_encrypt_meta() {
   [[ -n "$age_recipient_args" ]] || _die 1 "Could not build all recipients list"
   local ret=
 
+  # shellcheck disable=SC2086
   _exec age --encrypt \
     $age_recipient_args \
     --armor \
     --output "$vaulted_file" "$APP_CONFIG_FILE"
   ret=$?
-  [[ "$ret" -eq 0 ]] || _die "$?" "Something went wrong while encrypting config"
+  [[ "$ret" -eq 0 ]] || _die "$ret" "Something went wrong while encrypting config"
 
   _exec rm "$APP_CONFIG_FILE"
   _log INFO "Config vaulted in: $vaulted_file"
@@ -1270,9 +1282,9 @@ dir_lib_encrypt_meta() {
 }
 
 dir_lib_decrypt_meta() {
-  local ident_file=$1
+  local dest_hash=
 
-  local dest_hash=$(hash_sum "__config__")
+  dest_hash=$(hash_sum "__config__")
   local vaulted_file=${APP_STORES_DIR}/${dest_hash}.age
 
   _age_decrypt_with_ident \
@@ -1319,7 +1331,7 @@ cli__unlock() {
     done
     ;;
   user)
-    if vault_assert_exists "$APP_IDENT_VAULT_NAME" ]]; then
+    if vault_assert_exists "$APP_IDENT_VAULT_NAME" ; then
       _log INFO "Unlocking user vault for: $APP_IDENT_NAME"
       cli__vault__open "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
     fi
@@ -1353,7 +1365,7 @@ cli__decrypt() {
   : "FILE,Decrypt a file"
   local file=$1
   # load_ident
-  _age_decrypt_file "$file" $2
+  _age_decrypt_file "$file" "$2"
 }
 
 cli__encrypt() {
@@ -1380,7 +1392,7 @@ EOF
 
 # Read CLI options, shows id level options
 cli__id_options() {
-  while [[ ! -z "${1:-}" ]]; do
+  while [[ -n "${1:-}" ]]; do
     # : "parse-opt-start"
     case "$1" in
     -h | --help | help)
@@ -1395,7 +1407,7 @@ cli__id_options() {
       ;;
     -m | --message)
       : "MSG,Define message"
-      [[ ! -z "${2:-}" ]] || _die 1 "Missing message"
+      [[ -n "${2:-}" ]] || _die 1 "Missing message"
       msg=$2
       shift 2
       ;;
@@ -1434,9 +1446,8 @@ cli__id() {
 cli__id__new() {
   : "NAME,Add new identity"
   local ident_=${1:-}
-  local ident=
-  local email=
-  local passwd=
+  local ident=''
+  local email=''
 
   # Validate ident
   while [[ -z "$ident" ]]; do
@@ -1519,7 +1530,7 @@ EOF
 
 # Read CLI options, shows vault level options
 cli__vault_options() {
-  while [[ ! -z "${1:-}" ]]; do
+  while [[ -n "${1:-}" ]]; do
     # : "parse-opt-start"
     case "$1" in
     -h | --help | help)
@@ -1534,7 +1545,7 @@ cli__vault_options() {
       ;;
     -m | --message)
       : "MSG,Define message"
-      [[ ! -z "${2:-}" ]] || _die 1 "Missing message"
+      [[ -n "${2:-}" ]] || _die 1 "Missing message"
       msg=$2
       shift 2
       ;;
@@ -1643,7 +1654,7 @@ cli__vault__open() {
 # # Read CLI options, shows group level options
 # cli__group_options ()
 # {
-#   while [[ ! -z "${1:-}" ]]; do
+#   while [[ -n "${1:-}" ]]; do
 #     # : "parse-opt-start"
 #     case "$1" in
 #       -h|--help|help)
@@ -1657,7 +1668,7 @@ cli__vault__open() {
 #         ;;
 #       -m|--message)
 #         : "MSG,Define message"
-#         [[ ! -z "${2:-}" ]] || _die 1 "Missing message"
+#         [[ -n "${2:-}" ]] || _die 1 "Missing message"
 #         msg=$2
 #         shift 2
 #         ;;
@@ -1750,7 +1761,7 @@ cli_require() {
 
   local prog=
   for prog in ${deps-}; do
-    _check_bin $prog || {
+    _check_bin "$prog" || {
       _die 2 "Can't find '$prog', please install it first"
     }
   done
@@ -1768,7 +1779,7 @@ EOF
 
 # Parse CLI options
 cli_options() {
-  while [[ ! -z "${1:-}" ]]; do
+  while [[ -n "${1:-}" ]]; do
     # : "parse-opt-start"
     case "$1" in
     -h | --help)
@@ -1800,17 +1811,12 @@ cli_options() {
       elif [[ "$1" == "-vvv" ]]; then
         APP_LOG_LEVEL=TRACE
       else
-        [[ ! -z "${2:-}" ]] || _die 1 "Missing log level value"
+        [[ -n "${2:-}" ]] || _die 1 "Missing log level value"
         APP_LOG_LEVEL=$2
         shift 1
       fi
       shift 1
       _log INFO "Log level set to: $APP_LOG_LEVEL"
-      ;;
-    -V | --version)
-      : ",Show version"
-      echo "$APP_VERSION"
-      exit 0
       ;;
     -*)
       _die 1 "Unknown option: $1"
