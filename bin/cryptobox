@@ -44,10 +44,12 @@ APP_FORCE=${APP_FORCE:-false}
 APP_LOG_LEVEL=INFO # DRY, DEBUG, TRACE
 
 # Automatic vars
+# set -x
 APP_IS_INTERACTIVE=${APP_IS_INTERACTIVE:-$([ -t 0 ] && echo true || echo false)}
-SCRIPT_REAL_PATH=$(realpath "$0")
+SCRIPT_REAL_PATH=$(realpath  "$0")
 SCRIPT_REAL_DIR=$(cd -- "$(dirname -- "$SCRIPT_REAL_PATH")" &>/dev/null && pwd)
 APP_REAL_NAME=$(basename "$SCRIPT_REAL_PATH")
+# set +x
 
 APP_CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/$APP_REAL_NAME
 
@@ -192,20 +194,18 @@ cb_config_encrypt() {
   [[ -n "$age_recipient_args" ]] || _die 1 "Could not build all recipients list"
   local ret=
 
-  # Do the change ?
+  # Decrypt the current file, and get checksum
   local commited_content_hash=$(_age_decrypt_with_ident \
     --output - "$vaulted_file" \
     | hash_sum -
     )
 
-
+  # Decrypt local config and get hash
   local curr_hash=$(cat "$APP_CONFIG_FILE" | hash_sum - )
-  # local old_hash=$(cat ".HASH" 2>/dev/null )
 
+  # Quit if nothing to do
   if [[ "$commited_content_hash" == "$curr_hash" ]] ; then
-    set +x
     _log INFO "No need to reencrypt config"
-    
     return 0
   fi
 
@@ -216,10 +216,7 @@ cb_config_encrypt() {
     --output "$vaulted_file" "$APP_CONFIG_FILE" || \
       _die "Failed to encrypt file: $APP_CONFIG_FILE"
 
-  # ret=$?
-  # [[ "$ret" -eq 0 ]] || _die "$ret" "Something went wrong while encrypting config"
 
-  # _exec rm "$APP_CONFIG_FILE"
   _log INFO "Config updated in vault: $vaulted_file"
 
 }
@@ -233,7 +230,6 @@ cb_config_decrypt() {
   local tmp_dst="${dest}.new"
 
   [[ ! -e "$tmp_dst" ]] || _exec rm "$tmp_dst"
-    # _die 1 "Please remove first: $tmp_dst"
   _age_decrypt_with_ident \
     --output "$tmp_dst" "$vaulted_file" || \
     _die "Failed to decrypt file: $vaulted_file"
@@ -247,14 +243,11 @@ cb_config_decrypt() {
     _log INFO "Config did not changed"
     return 0
   fi
-  # cat "$tmp_dst" | hash_sum - > .HASH
-  # echo -n "$new_hash" > .HASH
+
 
   if [[ -f "$dest" ]]; then
 
-  # set -x
     local changes=$(diff -U 0 "$dest" "$tmp_dst" | tail -n+4)
-
     local checksum_excluded=$(grep -v 'checksum = ' <<<"$changes" )
 
   #   echo "RESULT1: |$changes|"
@@ -440,7 +433,7 @@ cb_fix() {
       # echo "$store_kind"
       _log INFO "Updating $store_kind: $store_name"
       item_pull "$store_kind" "$store_name" || \
-        _log WARN "Failed to pull vault: $name"
+        _log WARN "Failed to pull vault: $store_name"
       echo 
     done
   fi

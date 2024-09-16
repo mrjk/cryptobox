@@ -10,9 +10,10 @@ item_hook() {
   shift 2 || true
 
   [ -n "$cmd" ] || _die 3 "Missing kind name, this is a bug"
-
-  if [[ $(type -t "${kind}__${cmd}") == function ]]; then
-    "${kind}__${cmd}" "$@"
+  local fn_name="lib_${kind}_hook__${cmd}"
+  if [[ $(type -t "${fn_name}") == function ]]; then
+    _log INFO "Executing hook: $fn_name"
+    "${fn_name}" "$@"
     return $?
   fi
 }
@@ -186,11 +187,13 @@ item_new() {
     _log ERROR "Missing recipient(s)"
     return 1
   }
+  # set -x
   for ident in $idents; do
     [[ -n "$ident" ]] || continue
-    lib_id_exists "$ident" ||
+    lib_id_exists "$ident" || {
       _log ERROR "Ident '$ident' does not exists"
       return 1
+    }
   done
 
   # Save in DB
@@ -209,6 +212,15 @@ item_new() {
   _log INFO "Create new $kind '$vault_name' for: $idents"
   local vault_hash=$(hash_sum "$vault_name")
   _dir_db set "$kind.$vault_name.store-hash" "$vault_hash"
+
+  # set -x
+  # HOOK: ${kind}_new_final
+  item_hook "$kind" new_final \
+    || {
+      _log ERROR "Failed hook: new_final for $kind"
+      return 1 
+    }
+
 
 }
 
@@ -270,6 +282,14 @@ item_rm() {
     changed=true
   fi
 
+  # HOOK: ${kind}_rm_final
+  item_hook "$kind" rm_final \
+    || {
+      _log ERROR "Failed hook: rm_final for $kind"
+      return 1 
+    }
+
+
   # report to user
   if $changed; then
     _log INFO "$kind '$vault_name' has been removed"
@@ -296,17 +316,17 @@ item_push() {
       return 1 
     }
 
-  # Guess vault_dir
-  if [[ -z "$vault_dir" ]]; then
-  case "$kind" in
-    vault) 
-      vault_dir="$APP_VAULTS_DIR/$vault_name"
-      ;;
-    gitvault) 
-      vault_dir="$APP_SPOOL_DIR/$vault_name"
-      ;;
-  esac
-  fi
+  # # Guess vault_dir
+  # if [[ -z "$vault_dir" ]]; then
+  # case "$kind" in
+  #   vault) 
+  #     vault_dir="$APP_VAULTS_DIR/$vault_name"
+  #     ;;
+  #   gitvault) 
+  #     vault_dir="$APP_SPOOL_DIR/$vault_name"
+  #     ;;
+  # esac
+  # fi
 
   # Build vars
   local vault_hash=$(_dir_db get "$kind.$vault_name.store-hash")
@@ -329,16 +349,22 @@ item_push() {
   }
 
   # HOOK: ${kind}_push_post
+  item_hook "$kind" push_post \
+    || {
+      _log ERROR "Failed hook: push_post for $kind"
+      return 1 
+    }
+
   # Gitvault specificties
-  if [[ "$kind" == "gitvault" ]]; then
-    local target_dir="$APP_VAULTS_DIR/$vault_name"
-    if [[ -d "$target_dir" ]]; then
-      _log DEBUG "Push local change to gitvault"
-      _exec git -C "$target_dir" push 2>/dev/null
-    else
-      _log DEBUG "Skip git push because vault not mounted"
-    fi
-  fi
+  # if [[ "$kind" == "gitvault" ]]; then
+  #   local target_dir="$APP_VAULTS_DIR/$vault_name"
+  #   if [[ -d "$target_dir" ]]; then
+  #     _log DEBUG "Push local change to gitvault"
+  #     _exec git -C "$target_dir" push 2>/dev/null
+  #   else
+  #     _log DEBUG "Skip git push because vault not mounted"
+  #   fi
+  # fi
 
   # Fetch recipients
   age_recipient_args=$(item_recipient_idents_age_args "$kind" "$vault_name")
@@ -349,7 +375,7 @@ item_push() {
 
   # Encrypt
   local content_checksum=$(tar -czf - -C "$vault_dir" . | hash_sum -)
-  local old_checksum=$(_dir_db get "$kind.$vault_name.checksum")
+  local old_checksum=$(_cache_db get "$kind.$vault_name.checksum")
 
   local ret=0
   local changed="without changes"
@@ -359,7 +385,7 @@ item_push() {
     changed="with changes"
     _log DEBUG "Changes detected in $kind, rencrypting data"
     if ! $APP_DRY; then
-      _dir_db set "$kind.$vault_name.checksum" "$content_checksum"
+      _cache_db set "$kind.$vault_name.checksum" "$content_checksum"
       ensure_dir "$APP_STORES_DIR"
       # shellcheck disable=SC2086
       tar -czf - -C "$vault_dir" . | age --encrypt --armor -output "$vault_enc" $age_recipient_args
@@ -368,6 +394,14 @@ item_push() {
       _log DRY "Update encrypted file: $vault_enc"
     fi
   fi
+
+  # HOOK: ${kind}_push_final
+  item_hook "$kind" push_final \
+    || {
+      _log ERROR "Failed hook: push_final for $kind"
+      return 1 
+    }
+
 
   _log INFO "$kind '$vault_name' pushed successfully $changed."
 
@@ -378,17 +412,26 @@ item_pull (){
   local kind=$1
   local vault_name=$2
   local ident=${3:-}
-  local vault_dir='' #$3
+  local vault_dir="$APP_VAULTS_DIR/$vault_name"
+
+
+  # HOOK: ${kind}_pull_pre
+  item_hook "$kind" pull_pre \
+    || {
+      _log ERROR "Failed hook: pull_pre for $kind"
+      return 1 
+    }
+
 
   # Guess vault_dir
-  case "$kind" in
-    vault) 
-      vault_dir="$APP_VAULTS_DIR/$vault_name"
-      ;;
-    gitvault) 
-      vault_dir="$APP_SPOOL_DIR/$vault_name"
-      ;;
-  esac
+  # case "$kind" in
+  #   vault) 
+  #     vault_dir="$APP_VAULTS_DIR/$vault_name"
+  #     ;;
+  #   gitvault) 
+  #     vault_dir="$APP_SPOOL_DIR/$vault_name"
+  #     ;;
+  # esac
 
   # Build vars
   local vault_hash=$(_dir_db get "$kind.$vault_name.store-hash")
@@ -436,15 +479,26 @@ item_pull (){
   _log DEBUG "Opening '$vault_enc' with ident '$ident' in: $vault_dir"
   
   # HOOK: ${kind}_pull_post
-  if [[ "$kind" == "vault" ]]; then
-    # Delete existing content, so deleted files are not re-propagated
-    if $APP_FORCE; then
-      _log WARN "Local changes in '$vault_dir' will be lost after update"
-      rm -rf "$vault_dir"
-    else
-      _log DEBUG "Local changes in '$vault_dir' are kept, deleted files may reappear. Use '-f' to delete first."
-    fi
-  fi
+  item_hook "$kind" pull_post \
+    || {
+      _log ERROR "Failed hook: pull_post for $kind"
+      return 1 
+    }
+
+
+  # HOOK: ${kind}_pull_post
+  # if [[ "$kind" == "vault" ]]; then
+  #   # Delete existing content, so deleted files are not re-propagated
+  #   if $APP_FORCE; then
+  #     _log WARN "Local changes in '$vault_dir' will be lost after update"
+  #     rm -rf "$vault_dir"
+  #   else
+  #     _log DEBUG "Local changes in '$vault_dir' are kept, deleted files may reappear. Use '-f' to delete first."
+  #   fi
+  # fi
+
+
+
 
   ensure_dir "$vault_dir"
   if ! $APP_DRY; then
@@ -472,6 +526,13 @@ item_pull (){
       _exec git clone "$APP_SPOOL_DIR/$vault_name" "$target_dir" >/dev/null
     fi
   fi
+
+  # HOOK: ${kind}_pull_final
+  item_hook "$kind" pull_final \
+    || {
+      _log ERROR "Failed hook: pull_final for $kind"
+      return 1 
+    }
 
   _log INFO "Vault '$vault_name' pulled successfully in $vault_dir"
 

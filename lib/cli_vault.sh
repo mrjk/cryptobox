@@ -2,55 +2,28 @@
 APP_ITEMS_KINDS="${APP_ITEMS_KINDS} vault"
 
 
-
-# Vault management (internal)
+# vault Hooks
 # =================
 
-# List vault names in config
-# DEPRECATED, use: item_list_names instead
-# vault_list_names() {
-#   _dir_db dump "vault." |
-#     sed 's/^vault.//;s/\..*//' |
-#     sort -u
-# }
 
-# List all vault that belong to ident
-# vault_list_names_for_id() {
-#   local ident=$1
+lib_vault_hook__pull_post ()
+{
+    # Delete existing content, so deleted files are not re-propagated
+    if $APP_FORCE; then
+      _log WARN "Local changes in '$vault_dir' will be lost after update"
+      rm -rf "$vault_dir"
+    else
+      _log DEBUG "Local changes in '$vault_dir' are kept, deleted files may reappear. Use '-f' to delete first."
+    fi
+}
 
-#   _dir_db dump "vault." |
-#     grep "=$ident$" |
-#     sed 's/^vault.//;s/\..*//' |
-#     sort -u
-# }
+lib_vault_hook__push_final () {
 
-# List opened vaults
-# lib_vault_opened_names() {
-#   local vaults=$(item_list_names $kind)
-#   for name in $vaults; do
-#     [[ -d "$APP_VAULTS_DIR/$name" ]] && echo "$name"
-#   done
-# }
+  _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
 
-# Check if a vault exists
-# DEPRECATED, use: item_assert_exists instead
-# vault_assert_exists() {
-#   local name=$1
-#   item_list_names $kind | grep -q "^$name$"
-#   return $?
-# }
+}
 
-# Vault management (public)
-# =================
-
-# Create an new opened vault
-lib_vault_new() {
-  local vault_name=$1
-  shift 1
-  local idents=${@:-}
-
-  # Create new item
-  item_new vault "$vault_name" "$idents"
+lib_vault_hook__new_final () {
 
   # Create vault
   local vault_dest="$APP_VAULTS_DIR/$vault_name"
@@ -60,41 +33,6 @@ lib_vault_new() {
   _log INFO "New vault created in: $vault_dest"
 
 }
-
-
-
-# Push changes and clean
-lib_vault_lock() {
-  local vault_name=$1
-
-  local ret=''
-  item_push vault "$vault_name"
-  ret=$?
-
-  # Validate
-  [[ "$ret" -eq "0" ]] ||
-    _die "$ret" "Some errors happened, did not remove local data!"
-
-  # Cleanup
-  _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
-  _log INFO "Vault '$vault_name' closed successfully."
-
-}
-
-# Decrypt and open vault
-lib_vault_unlock() {
-  local vault_name=$1
-  shift 1
-  local ident=${@:-}
-
-  item_pull vault "$vault_name" "$ident"
-}
-
-
-
-
-
-
 
 # CLI Vault Commands
 # =================
@@ -166,7 +104,12 @@ cli__vault() {
 
 cli__vault__new() {
   : "NAME [ID...],Create new vault"
-  lib_vault_new "$@"
+  local vault_name=$1
+  shift 1
+  local idents=${@:-}
+
+  # Create new item
+  item_new vault "$vault_name" "$idents"
 }
 
 cli__vault__ls() {
@@ -186,11 +129,16 @@ cli__vault__rm() {
 
 cli__vault__lock() {
   : "NAME,Close vault"
-  lib_vault_lock "$@"
+  local vault_name=$1
+  item_push vault "$vault_name"
 }
 
 cli__vault__unlock() {
   : "NAME [ID...],Open or create vault"
-  lib_vault_unlock "$@"
+  local vault_name=$1
+  shift 1
+  local ident=${@:-}
+
+  item_pull vault "$vault_name" "$ident"
 }
 
