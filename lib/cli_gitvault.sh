@@ -14,6 +14,14 @@ lib_gitvault_hook__push_pre ()
 lib_gitvault_hook__push_post ()
 {
     local target_dir="$APP_VAULTS_DIR/$vault_name"
+    local repo_dir="../.spool/$vault_name"
+    
+    # if [[ ! -d "$repo_dir" ]]; then
+    #     _log INFO "Autocreating empty gitvault bare repo"
+    #   _exec git init --bare "$repo_dir"
+    # fi
+
+
     if [[ -d "$target_dir" ]]; then
       _log DEBUG "Push local change to gitvault"
       _exec git -C "$target_dir" push #2>/dev/null
@@ -22,7 +30,7 @@ lib_gitvault_hook__push_post ()
     fi
 }
 
-lib_gitvault_hook__push_final ()
+lib_gitvault_hook__lock_final ()
 {
   _exec rm -rf "$APP_SPOOL_DIR/$vault_name"
   _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
@@ -38,15 +46,27 @@ lib_gitvault_hook__pull_pre ()
 lib_gitvault_hook__pull_final ()
 {
     local target_dir="$APP_VAULTS_DIR/$vault_name"
+    local repo_dir="$APP_SPOOL_DIR/$vault_name"
+    local repo_dir_rel="../.spool/$vault_name"
 
-    if [[ -d "$target_dir" ]]; then
+    if [[ ! -d "$repo_dir" ]]; then
+        _log INFO "Autocreating empty gitvault bare repo"
+      _exec git init --bare "$repo_dir"
+    fi
+
+    if [[ -d "$target_dir/.git" ]]; then
       _log DEBUG "Pull from local remote"
-      _exec git -C "$target_dir" pull --rebase >/dev/null
+      (
+        cd "$target_dir"
+        _exec git -C "$target_dir" pull --rebase >/dev/null
+      )
     else
       _log DEBUG "Clone from local remote"
       ensure_dir "$target_dir"
-      _exec git clone "$APP_SPOOL_DIR/$vault_name" "$target_dir" >/dev/null
+      _exec git clone "$repo_dir_rel" "$target_dir" >/dev/null
     fi
+
+# set +x
 }
 
 
@@ -62,11 +82,23 @@ lib_gitvault_hook__new_final ()
 {
   # Create git spool
   local repo_spool="$APP_SPOOL_DIR/$vault_name"
+  local repo_dir_rel="../.spool/$vault_name"
   git init --bare "$repo_spool"
 
   # Create vault
   local vault_dest="$APP_VAULTS_DIR/$vault_name"
-  git clone "$repo_spool" "$vault_dest" 2>/dev/null
+  git clone "$repo_dir_rel" "$vault_dest" 2>/dev/null
+
+  # Create content
+  local target="README.md"
+  if [[ -f "$target" ]]; then
+    echo "# Welcome on $vault_name" >  "$vault_dest/$target"
+    _exec git -C "$vault_dest" add -m "add: new $kind $vault_name"  "$target"
+    _exec git -C "$vault_dest" push origin
+  fi
+
+#   touch 
+#   git clone "$repo_spool" "$vault_dest" 2>/dev/null
 
   _log INFO "New gitvault created in: $vault_dest"
 
@@ -155,11 +187,13 @@ cli__gitvault__new() {
 cli__gitvault__ls() {
   : ",List gitvaults"
 
+{
   if [[ "$#" -eq 0 ]]; then
     item_list_names gitvault
   else
     item_ident_resources "$1" gitvault
   fi
+} || _log INFO "No available gitvaults"
 }
 
 cli__gitvault__rm() {
@@ -171,7 +205,7 @@ cli__gitvault__rm() {
 cli__gitvault__lock() {
   : "NAME,Close gitvault"
   local vault_name=$1
-  item_push gitvault "$vault_name"
+  item_lock gitvault "$vault_name"
 }
 
 cli__gitvault__unlock() {
@@ -179,7 +213,7 @@ cli__gitvault__unlock() {
   local vault_name=$1
   shift 1
   local ident=${@:-}
-  item_pull gitvault "$vault_name" "$ident"
+  item_unlock gitvault "$vault_name" "$ident"
 }
 
 cli__gitvault__push() {

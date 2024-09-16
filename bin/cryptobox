@@ -38,6 +38,7 @@ APP_VERSION=0.0.1
 # App configuration
 APP_LOG_SCALE="TRACE:DEBUG:RUN:INFO:DRY:HINT:NOTICE:CMD:USER:WARN:ERR:ERROR:CRIT:TODO:DIE:QUIT:PROMPT"
 #APP_DEPENDENCIES="column tree"
+# set -x
 
 APP_DRY=${APP_DRY:-false}
 APP_FORCE=${APP_FORCE:-false}
@@ -69,7 +70,6 @@ source "$SCRIPT_LIB/lib_resources.sh"
 source "$SCRIPT_LIB/cli_idents.sh"
 source "$SCRIPT_LIB/cli_gitvault.sh"
 source "$SCRIPT_LIB/cli_vault.sh"
-
 
 
 # Init loaders
@@ -474,13 +474,15 @@ cb_lock (){
     all)
       for vault in $(item_ident_resources "$APP_IDENT_NAME" "$kind"); do
         # _log INFO "Opening vault: $vault"
-        "lib_${kind}_lock" "$vault" "$APP_IDENT_NAME"
+        # "lib_${kind}_lock" "$vault" "$APP_IDENT_NAME"
+        item_pull "${kind}" "$vault" "$APP_IDENT_NAME"
       done
       ;;
     user)
       if item_assert_exists "$kind" "$APP_IDENT_VAULT_NAME" ; then
         _log INFO "Locking user vault for: $APP_IDENT_NAME"
-        "lib_${kind}_lock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
+        # "lib_${kind}_lock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
+        item_pull "${kind}" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
       fi
       ;;
     esac
@@ -514,13 +516,15 @@ cb_unlock(){
     all)
       for vault in $(item_ident_resources "$APP_IDENT_NAME" "$kind"); do
         # _log INFO "Opening vault: $vault"
-        "lib_${kind}_unlock" "$vault" "$APP_IDENT_NAME"
+        # "lib_${kind}_unlock" "$vault" "$APP_IDENT_NAME"
+        item_pull "${kind}" "$vault" "$APP_IDENT_NAME"
       done
       ;;
     user)
       if item_assert_exists "$kind" "$APP_IDENT_VAULT_NAME" ; then
         _log INFO "Unlocking user vault for: $APP_IDENT_NAME"
-        "lib_${kind}_unlock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
+        # "lib_${kind}_unlock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
+        item_pull "${kind}" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
       fi
       ;;
     esac
