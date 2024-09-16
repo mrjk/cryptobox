@@ -12,7 +12,7 @@ item_hook() {
   [ -n "$cmd" ] || _die 3 "Missing kind name, this is a bug"
   local fn_name="lib_${kind}_hook__${cmd}"
   if [[ $(type -t "${fn_name}") == function ]]; then
-    _log INFO "Executing hook: $fn_name"
+    _log INFO "Executing hook: $fn_name for ${vault_name:-}"
     "${fn_name}" "$@"
     return $?
   fi
@@ -446,6 +446,10 @@ item_pull (){
     return 1
   fi
   # TMP: [[ ! -d "$vault_dir" ]] || _die 0 "Already opened in $vault_dir"
+  [[ -f "$vault_enc" ]] || {
+    _log INFO "Encrypted file for $kind '$vault_name' does not exists: $vault_enc"
+    return 1
+  }
   [[ -n "$vault_hash" ]] || {
     _log ERROR "Could not get $kind store-hash"
     return 1
@@ -514,18 +518,18 @@ item_pull (){
   fi
 
   # Do gitvault specificties
-  if [[ "$kind" == "gitvault" ]]; then
-    local target_dir="$APP_VAULTS_DIR/$vault_name"
+  # if [[ "$kind" == "gitvault" ]]; then
+  #   local target_dir="$APP_VAULTS_DIR/$vault_name"
 
-    if [[ -d "$target_dir" ]]; then
-      _log DEBUG "Pull from local remote"
-      _exec git -C "$target_dir" pull --rebase >/dev/null
-    else
-      _log DEBUG "Clone from local remote"
-      ensure_dir "$target_dir"
-      _exec git clone "$APP_SPOOL_DIR/$vault_name" "$target_dir" >/dev/null
-    fi
-  fi
+  #   if [[ -d "$target_dir" ]]; then
+  #     _log DEBUG "Pull from local remote"
+  #     _exec git -C "$target_dir" pull --rebase >/dev/null
+  #   else
+  #     _log DEBUG "Clone from local remote"
+  #     ensure_dir "$target_dir"
+  #     _exec git clone "$APP_SPOOL_DIR/$vault_name" "$target_dir" >/dev/null
+  #   fi
+  # fi
 
   # HOOK: ${kind}_pull_final
   item_hook "$kind" pull_final \

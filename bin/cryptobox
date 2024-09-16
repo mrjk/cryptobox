@@ -309,7 +309,7 @@ cb_pull() {
   _log INFO "Start pull"
 
   # Update config
-  git pull --ff
+  _exec git pull --ff -Xtheirs
   cb_config_decrypt
   items_pull_opened "$ident"
 

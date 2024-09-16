@@ -58,17 +58,17 @@ cli__vault_options() {
       clish_help cli__vault
       _die 0
       ;;
-    -a | --all)
-      : ",Select all"
-      mode=all
-      shift
-      ;;
-    -m | --message)
-      : "MSG,Define message"
-      [[ -n "${2:-}" ]] || _die 1 "Missing message"
-      msg=$2
-      shift 2
-      ;;
+    # -a | --all)
+    #   : ",Select all"
+    #   mode=all
+    #   shift
+    #   ;;
+    # -m | --message)
+    #   : "MSG,Define message"
+    #   [[ -n "${2:-}" ]] || _die 1 "Missing message"
+    #   msg=$2
+    #   shift 2
+    #   ;;
     -*)
       _die 1 "Unknown option: $1"
       ;;
@@ -85,8 +85,8 @@ cli__vault() {
   : "COMMAND,Manage vaults"
 
   # Set default vars
-  local msg="Default message"
-  local mode="limited"
+#   local msg="Default message"
+#   local mode="limited"
   local args=
 
   # Parse args

@@ -16,7 +16,7 @@ lib_gitvault_hook__push_post ()
     local target_dir="$APP_VAULTS_DIR/$vault_name"
     if [[ -d "$target_dir" ]]; then
       _log DEBUG "Push local change to gitvault"
-      _exec git -C "$target_dir" push 2>/dev/null
+      _exec git -C "$target_dir" push #2>/dev/null
     else
       _log DEBUG "Skip git push because vault not mounted"
     fi
@@ -32,6 +32,21 @@ lib_gitvault_hook__push_final ()
 lib_gitvault_hook__pull_pre ()
 {
     vault_dir="$APP_SPOOL_DIR/$vault_name"
+}
+
+
+lib_gitvault_hook__pull_final ()
+{
+    local target_dir="$APP_VAULTS_DIR/$vault_name"
+
+    if [[ -d "$target_dir" ]]; then
+      _log DEBUG "Pull from local remote"
+      _exec git -C "$target_dir" pull --rebase >/dev/null
+    else
+      _log DEBUG "Clone from local remote"
+      ensure_dir "$target_dir"
+      _exec git clone "$APP_SPOOL_DIR/$vault_name" "$target_dir" >/dev/null
+    fi
 }
 
 
