@@ -194,7 +194,7 @@ lib_id_new_ident__age() {
   fi
 
   # Load ident settings
-  load_ident "$ident"
+  cb_init_ident "$ident"
 
   # Check if destinayion already exists
   if [[ -f "$APP_IDENT_FILE_ENC" ]]; then
@@ -229,7 +229,7 @@ lib_id_rm_ident__age() {
   local ident=$1
   local changed=false
 
-  load_ident "$ident"
+  cb_init_ident "$ident"
 
   # Ensure id does exists in config
   if lib_id_exists "$APP_IDENT_NAME"; then
@@ -370,8 +370,8 @@ cli__id__ls() {
 
 cli__id__keypair() {
   : "NAME,Show identity key pair (require unlock password)"
-  load_ident "$1"
-  load_ident_password
+  cb_init_ident "$1"
+  cb_init_ident_pass
 
   echo "ident: $APP_IDENT_NAME"
   echo "ident: $APP_IDENT_HASH"
@@ -387,8 +387,8 @@ cli__id__rm() {
 cli__id__keyring() {
   : "IDENT,Set ident in local keyring"
   local ident=$1
-  load_ident "$1"
-  load_ident_password
+  cb_init_ident "$1"
+  cb_init_ident_pass
 
   # Store in keyring
   printf "%s" "$APP_IDENT_PRIV_KEY" |

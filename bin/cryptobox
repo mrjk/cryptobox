@@ -81,7 +81,7 @@ source "$SCRIPT_LIB/cli_vault.sh"
 
 
 # Init app
-data_init() {
+cb_init_app() {
 
   # export PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
   export PROJECT_ROOT=$PWD
@@ -98,13 +98,16 @@ data_init() {
   export APP_SPOOL_DIR="${APP_DATA_DIR}/.spool"
 
   # Prepare config
+  APP_CACHE_FILE="$APP_SPOOL_DIR/secret_hash.ini"
   APP_CONFIG_FILE="${APP_DATA_DIR}/cryptobox.ini"
   APP_CONFIG_FILE_HASH=$(hash_sum "__config__")
   APP_CONFIG_FILE_ENC="${APP_STORES_DIR}/${APP_CONFIG_FILE_HASH}.age"
+
+
 }
 
 # VALIDATED
-load_ident() {
+cb_init_ident() {
   local ident_name=$1
 
   [[ -z "${APP_IDENT_NAME:-}" ]] || return 0
@@ -137,7 +140,7 @@ load_ident() {
 }
 
 # Inject private user key password
-load_ident_password() {
+cb_init_ident_pass() {
 
   [[ -z "${APP_IDENT_PRIV_KEY:-}" ]] || return 0
   local private_key=
@@ -229,8 +232,8 @@ cb_config_decrypt() {
   local dest=$APP_CONFIG_FILE
   local tmp_dst="${dest}.new"
 
-  [[ ! -e "$tmp_dst" ]] || \
-    _die 1 "Please remove first: $tmp_dst"
+  [[ ! -e "$tmp_dst" ]] || _exec rm "$tmp_dst"
+    # _die 1 "Please remove first: $tmp_dst"
   _age_decrypt_with_ident \
     --output "$tmp_dst" "$vaulted_file" || \
     _die "Failed to decrypt file: $vaulted_file"
@@ -264,13 +267,13 @@ cb_config_decrypt() {
       erase=true
     else
       _log WARN "Configuration changed for: $dest"
-      colordiff -u "$dest" "$tmp_dst"
+      colordiff -u "$tmp_dst" "$dest"
       _log WARN "Configuration will be updated:"
 
+      erase=false
       if ! $APP_FORCE; then
-        erase=false
         _confirm \
-          "Do you want to add these changes to config?" &&
+          "Do you want to add these changes to config?" || \
           erase=true
       fi
     fi
@@ -292,13 +295,13 @@ cb_config_decrypt() {
 
 cb_sync (){
   local ident=$1
-  cli__pull "$ident"
+  cb_pull "$ident"
 
   if _is_git_diverged "main"; then
-    cli__fix "$ident"
+    cb_fix "$ident"
   fi
 
-  cli__push "$ident"
+  cb_push "$ident"
 
   _log INFO "Repo is now fully synced"
 
@@ -308,7 +311,7 @@ cb_pull() {
   : ",Pull add commit and push"
   local ident=$1
 
-  load_ident "$ident"
+  cb_init_ident "$ident"
 
   _log INFO "Start pull"
 
@@ -333,7 +336,7 @@ cb_push() {
   : ",Pull add commit and push"
   local ident=$1
 
-  load_ident "$ident"
+  cb_init_ident "$ident"
 
   _log INFO "Start push"
   items_push_opened "$ident"
@@ -371,7 +374,7 @@ cb_fix() {
     _die 0 "No need to fix cryptobox"
   fi
 
-  load_ident "$ident"
+  cb_init_ident "$ident"
 
 
   _log INFO "Compare changes from upstream"
@@ -436,7 +439,8 @@ cb_fix() {
 
       # echo "$store_kind"
       _log INFO "Updating $store_kind: $store_name"
-      item_pull "$store_kind" "$store_name"
+      item_pull "$store_kind" "$store_name" || \
+        _log WARN "Failed to pull vault: $name"
       echo 
     done
   fi
@@ -464,7 +468,7 @@ cb_fix() {
 
 cb_lock (){
   # set -x
-  load_ident "$1"
+  cb_init_ident "$1"
 
 
   # Close secrets
@@ -498,7 +502,7 @@ cb_lock (){
 
 
 cb_unlock(){
-  load_ident "$1"
+  cb_init_ident "$1"
 
 
 
@@ -591,14 +595,14 @@ cli__fix() {
 cli__decrypt() {
   : "FILE,Decrypt a file"
   local file=$1
-  # load_ident
+  # cb_init_ident
   _age_decrypt_file "$file" "$2"
 }
 
 cli__encrypt() {
   : "FILE,Encrypt a file"
   local file=$1
-  load_ident
+  cb_init_ident
   _age_encrypt_file "$file" "$APP_USER_IDENTITY_FILE"
 }
 
@@ -707,7 +711,7 @@ cli() {
   # Init app
   cli_init
 
-  data_init
+  cb_init_app
 
   # Route commands before requirements
   local cmd=${1:-help}

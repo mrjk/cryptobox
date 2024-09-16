@@ -2,6 +2,81 @@
 
 
 
+# UI libs
+# =================
+
+# Ask the user to confirm
+_confirm() {
+  local msg="Do you want to continue?"
+  >&2 printf "%s" "${1:-$msg}"
+  >&2 printf "%s" "([y]es or [N]o): "
+  export REPLY=
+
+  >&2 read -r REPLY
+  case $(tr '[A-Z]' '[a-z]' <<<"$REPLY") in
+  y | yes)
+    # printf "%s\n" "true"
+    return 0
+    ;;
+  *)
+    # printf "%s\n" "false"
+    return 1
+    ;;
+  esac
+}
+
+# Ask the user to input string
+_input() {
+  local msg="Please enter input:"
+  local default=${2-}
+  >&2 printf "%s" "${1:-$msg}${default:+ [$default]}: "
+  >&2 read -r REPLY
+  [[ -n "$REPLY" ]] || REPLY=${default}
+  printf "%s\n" "$REPLY"
+}
+
+# Ask the user to input string
+_input2() {
+  local default=${1-}
+  local msg=${2:-"Please enter input"}
+  local status=true
+  export REPLY=
+
+  while $status; do
+    >&2 printf "%s" "${msg}${default:+ [$default]}: "
+    >&2 read -r REPLY
+    [[ -n "$REPLY" ]] || REPLY=${default}
+    status=false
+  done
+
+  # printf "%s\n" "$REPLY"
+}
+
+_input_pass() {
+  local msg=${1:-"Please enter password"}
+  local status=true
+  export REPLY=
+
+  while $status; do
+    >&2 printf "%s" "${msg}: "
+    >&2 read -s -r REPLY
+
+    >&2 echo ""
+    if [[ -z "$REPLY" ]]; then
+      _log WARN "Empty password, please try again."
+    else
+      status=false
+    fi
+  done
+
+}
+
+# Transform yaml to json
+_yaml2json() {
+  python3 -c 'import json, sys, yaml ; y = yaml.safe_load(sys.stdin.read()) ; print(json.dumps(y))'
+}
+
+
 
 # Low level helpers
 # =================
@@ -188,7 +263,7 @@ is_age_encrypted_file() {
 
 # Passwordless decrypt
 _age_decrypt_with_ident() {
-  load_ident_password || return $?
+  cb_init_ident_pass || return $?
 
   [[ -n "$APP_IDENT_PRIV_KEY" ]] || _die 1 "Missing ident private key"
   _log DEBUG "Decrypt with age and internal priv key"
@@ -219,7 +294,7 @@ _age_decrypt_file() {
   local ident=$2
   local dest=${3:-$file}
 
-  # load_ident "$ident"
+  # cb_init_ident "$ident"
 
   ident=${ident:-$APP_USER_IDENTITY_CRYPT_TARGET}
 

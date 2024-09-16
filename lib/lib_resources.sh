@@ -2,11 +2,25 @@
 # Item management (internal)
 # =================
 
+# Start a hook
+item_hook() {
+  
+  local kind=$1
+  local cmd=$2
+  shift 2 || true
+
+  [ -n "$cmd" ] || _die 3 "Missing kind name, this is a bug"
+
+  if [[ $(type -t "${kind}__${cmd}") == function ]]; then
+    "${kind}__${cmd}" "$@"
+    return $?
+  fi
+}
 
 
 ## Multi kind functions
 #  ------
-APP_ITEMS_KINDS="vault gitvault"
+APP_ITEMS_KINDS=""
 
 
 # List opened vaults
@@ -162,15 +176,21 @@ item_new() {
   local valid=false
 
   # Sanity check
-  item_assert_exists "$kind" "$vault_name" &&
-    _die 0 "Vault '$vault_name' already exists."
-  
+  item_assert_exists "$kind" "$vault_name" && {
+    _log INFO "Vault '$vault_name' already exists."
+    return 0
+  }
+    
   # Check recipients
-  [[ -n "$idents" ]] || _die 1 "Missing recipient(s)"
+  [[ -n "$idents" ]] || {
+    _log ERROR "Missing recipient(s)"
+    return 1
+  }
   for ident in $idents; do
     [[ -n "$ident" ]] || continue
     lib_id_exists "$ident" ||
-      _die 1 "Ident '$ident' does not exists"
+      _log ERROR "Ident '$ident' does not exists"
+      return 1
   done
 
   # Save in DB
@@ -181,7 +201,8 @@ item_new() {
   done
 
   if ! $valid; then
-    _die 1 'Missing valid idents, abort !'
+    _log ERROR 'Missing valid idents, abort !'
+    return 1
   fi
 
   # Create hash
@@ -204,7 +225,12 @@ item_rm() {
   local vault_dir="$APP_VAULTS_DIR/$vault_name"
 
   # Sanity checks
-  [[ -n "$vault_hash" ]] || _die 1 "Could not get $kind store hash"
+  [[ -n "$vault_hash" ]] || {
+    _log ERROR "Could not get $kind store hash"
+    return 1
+  }
+
+  # HOOK: ${kind}_rm_pre
 
   # Clear encrypted file
   if [[ -f "$vault_enc" ]]; then
@@ -235,6 +261,9 @@ item_rm() {
     fi
   fi
 
+  # HOOK: ${kind}_rm_post
+
+
   # Clear configuration
   if item_assert_exists "$kind" "$vault_name"; then
     _dir_db rms "$kind.$vault_name"
@@ -256,10 +285,19 @@ item_rm() {
 item_push() {
   local kind=$1
   local vault_name=$2
+  vault_dir="$APP_VAULTS_DIR/$vault_name"
+
   # local vault_dir=${3:-}
 
+  # HOOK: ${kind}__push_pre
+  item_hook "$kind" push_pre \
+    || {
+      _log ERROR "Failed hook: push_pre for $kind"
+      return 1 
+    }
+
   # Guess vault_dir
-  # if [[ -z "$vault_dir" ]]; then
+  if [[ -z "$vault_dir" ]]; then
   case "$kind" in
     vault) 
       vault_dir="$APP_VAULTS_DIR/$vault_name"
@@ -268,7 +306,7 @@ item_push() {
       vault_dir="$APP_SPOOL_DIR/$vault_name"
       ;;
   esac
-  # fi
+  fi
 
   # Build vars
   local vault_hash=$(_dir_db get "$kind.$vault_name.store-hash")
@@ -276,14 +314,21 @@ item_push() {
   # local vault_dir="$APP_VAULTS_DIR/$vault_name"
 
   # Sanity checks
-  item_assert_exists "$kind" "$vault_name" ||
-    _die 1 "Unknown $kind: '$vault_name', available names are: $(item_list_names "$kind" | tr '\n' ',')"
+  item_assert_exists "$kind" "$vault_name" || {
+    _log ERROR "Unknown $kind: '$vault_name', available names are: $(item_list_names "$kind" | tr '\n' ',')"
+    return 1
+  }
+    
   [[ -d "$vault_dir" ]] || {
     _log DEBUG "$kind '$vault_name' already closed/locked"
     return 0
   }
-  [[ -n "$vault_hash" ]] || _die 1 "Could not get $kind store-hash"
+  [[ -n "$vault_hash" ]] || {
+    log ERROR "Could not get $kind store-hash"
+    return 1
+  }
 
+  # HOOK: ${kind}_push_post
   # Gitvault specificties
   if [[ "$kind" == "gitvault" ]]; then
     local target_dir="$APP_VAULTS_DIR/$vault_name"
@@ -297,7 +342,10 @@ item_push() {
 
   # Fetch recipients
   age_recipient_args=$(item_recipient_idents_age_args "$kind" "$vault_name")
-  [[ -n "$age_recipient_args" ]] || _die 1 "No $kind identity matched for: $vault_name"
+  [[ -n "$age_recipient_args" ]] || {
+    _log ERROR "No $kind identity matched for: $vault_name"
+    return 1
+  }
 
   # Encrypt
   local content_checksum=$(tar -czf - -C "$vault_dir" . | hash_sum -)
@@ -347,22 +395,31 @@ item_pull (){
   local vault_enc="$APP_STORES_DIR/$vault_hash.age"
   # local vault_dir="$APP_VAULTS_DIR/$vault_name"
 
+  # HOOK: ${kind}_pull_pre
+
   # Sanity check
-  item_assert_exists "$kind" "$vault_name" ||
-    _die 1 "Unknown $kind: '$vault_name', available names are: $(item_list_names "$kind" | tr '\n' ',')"
+  if ! item_assert_exists "$kind" "$vault_name"; then
+    _log ERROR "Unknown $kind: '$vault_name', available names are: $(item_list_names "$kind" | tr '\n' ',')"
+    return 1
+  fi
   # TMP: [[ ! -d "$vault_dir" ]] || _die 0 "Already opened in $vault_dir"
-  [[ -n "$vault_hash" ]] || _die 1 "Could not get $kind store-hash"
+  [[ -n "$vault_hash" ]] || {
+    _log ERROR "Could not get $kind store-hash"
+    return 1
+  }
 
   # Fetch default recipients
   if [[ -z "$ident" ]]; then
     ident=$(item_recipient_idents "$kind" "$vault_name")
     local count=$(wc -l <<<"$ident")
     if [[ "$count" -eq 0 ]]; then
-      _die 1 "Failed to fetch $kind associated ids: $vault_name"
+      _log ERROR "Failed to fetch $kind associated ids: $vault_name"
+      return 1
     elif [[ "$count" -gt 1 ]]; then
       # TODO: Allow ot manage current ID
       ident_names=$(xargs <<<"$ident")
-      _die 1 "Too many ids for $kind '$vault_name', choose one of: ${ident_names// /,}"
+      _log ERROR "Too many ids for $kind '$vault_name', choose one of: ${ident_names// /,}"
+      return 1 
     fi
   fi
 
@@ -374,10 +431,11 @@ item_pull (){
   # echo ""
 
   # Load ident
-  load_ident "$ident"
+  cb_init_ident "$ident"
 
   _log DEBUG "Opening '$vault_enc' with ident '$ident' in: $vault_dir"
   
+  # HOOK: ${kind}_pull_post
   if [[ "$kind" == "vault" ]]; then
     # Delete existing content, so deleted files are not re-propagated
     if $APP_FORCE; then
@@ -396,7 +454,8 @@ item_pull (){
 
     if [[ "$rc" -ne 0 ]]; then
       _exec rmdir "$vault_dir"
-      _die 1 "Failed to decrypt file: $vault_enc"
+      _log ERROR "Failed to decrypt file: $vault_enc"
+      return 1
     fi
   fi
 

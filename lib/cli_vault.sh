@@ -1,4 +1,5 @@
 
+APP_ITEMS_KINDS="${APP_ITEMS_KINDS} vault"
 
 
 

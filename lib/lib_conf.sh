@@ -25,6 +25,26 @@ _db_ensure_open() {
   fi
 }
 
+_cache_db() {
+  local target=$APP_CACHE_FILE
+
+  # TO BE REMOVED LATER
+  # Ensure config is present
+
+    if [[ ! -f "$target" ]]; then
+        _log INFO "Create a new cache file: $target"
+        _exec git-db init "$target" 2>/dev/null \
+            || _die 1 "Can't create cache file!" 
+    fi
+
+
+  # Call db backend
+  local xtra_args=
+  ${APP_DRY} && xtra_args='-n'
+  _db "$target" $xtra_args "$@"
+
+}
+
 # VALIDATED
 # Directory DB
 _dir_db() {

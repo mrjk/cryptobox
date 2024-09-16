@@ -1,5 +1,7 @@
 
 
+APP_ITEMS_KINDS="${APP_ITEMS_KINDS} gitvault"
+
 
 # GitVault management (public)
 # =================
@@ -65,13 +67,13 @@ lib_gitvault_unlock() {
 
   item_pull gitvault "$vault_name" "$ident"
 
-  ensure_dir "$APP_VAULTS_DIR/$vault_name"
-  (
-    cd "$APP_VAULTS_DIR/$vault_name"
-    git clone "$APP_SPOOL_DIR/$vault_name" .
-  )
+#   ensure_dir "$APP_VAULTS_DIR/$vault_name"
+#   (
+#     cd "$APP_VAULTS_DIR/$vault_name"
+#     git clone "$APP_SPOOL_DIR/$vault_name" .
+#   )
   
-  _log INFO "gitvault '$vault_name' opened successfully."
+#   _log INFO "gitvault '$vault_name' opened successfully."
 
 }
 
@@ -128,9 +130,12 @@ lib_gitvault_pull() {
 
 }
 
+# _cache_db
 
-
-
+lib_gitvault_hook__push_pre ()
+{
+    vault_dir="$APP_SPOOL_DIR/$vault_name"
+}
 
 
 
@@ -200,6 +205,9 @@ cli__gitvault() {
   clish_dispatch cli__gitvault__ "$@" || _die $?
 }
 
+
+
+
 # Basic simple level sub-commands
 # ---------------
 
@@ -210,8 +218,6 @@ cli__gitvault__new() {
 
 cli__gitvault__ls() {
   : ",List gitvaults"
-
-  set -x
 
   if [[ "$#" -eq 0 ]]; then
     item_list_names gitvault
