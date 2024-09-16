@@ -17,7 +17,7 @@ lib_vault_hook__pull_post ()
     fi
 }
 
-lib_vault_hook__push_final () {
+lib_vault_hook__lock_final () {
 
   _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
 

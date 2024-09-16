@@ -502,8 +502,6 @@ item_pull (){
   # fi
 
 
-
-
   ensure_dir "$vault_dir"
   if ! $APP_DRY; then
     _age_decrypt_with_ident \
@@ -540,4 +538,35 @@ item_pull (){
 
   _log INFO "Vault '$vault_name' pulled successfully in $vault_dir"
 
+}
+
+
+
+
+# Fech secret from encrypted data
+item_lock (){
+
+  item_push gitvault "$vault_name"
+
+  # HOOK: ${kind}_pull_final
+  item_hook "$kind" lock_final \
+    || {
+      _log ERROR "Failed hook: pull_final for $kind"
+      return 1 
+    }
+
+}
+
+
+item_unlock (){
+  # HOOK: ${kind}_pull_final
+
+  item_pull gitvault "$vault_name" "$ident"
+
+
+  item_hook "$kind" unlock_final \
+    || {
+      _log ERROR "Failed hook: pull_final for $kind"
+      return 1 
+    }
 }
