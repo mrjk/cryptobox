@@ -51,1539 +51,35 @@ APP_REAL_NAME=$(basename "$SCRIPT_REAL_PATH")
 
 APP_CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/$APP_REAL_NAME
 
-# CLI libraries
-# =================
+SCRIPT_LIB="${SCRIPT_REAL_DIR}/../lib"
 
-# Logging support, with levels
-_log() {
-  local lvl="${1:-DEBUG}"
-  shift 1 || true
+# Load internal libs
+# source "$SCRIPT_LIB/utils.sh"
+# source "$SCRIPT_LIB/idents.sh"
+# source "$SCRIPT_LIB/backends.sh"
 
-  # Check log level filter
-  if [[ ! ":${APP_LOG_SCALE#*$APP_LOG_LEVEL:}:$APP_LOG_LEVEL:" =~ :"$lvl": ]]; then
-    if [[ ! ":${APP_LOG_SCALE}" =~ :"$lvl": ]]; then
-      >&2 printf "%s\n" "  BUG: Unknown log level: $lvl"
-    else
-      return 0
-    fi
-  fi
 
-  local msg=${*}
-  if [[ "$msg" == '-' ]]; then
-    msg="$(cat -)"
-  fi
-  while read -r -u 3 line; do
-    >&2 printf "%5s: %s\\n" "$lvl" "${line:- }"
-  done 3<<<"$msg"
-}
+source "$SCRIPT_LIB/lib_utils.sh"
+source "$SCRIPT_LIB/lib_clish.sh"
+source "$SCRIPT_LIB/lib_conf.sh"
+source "$SCRIPT_LIB/lib_resources.sh"
 
-# Terminate all with error message and rc code
-_die() {
-  local rc=${1:-1}
-  shift 1 || true
-  local msg="${*:-}"
-  local prefix=QUIT
-  [[ "$rc" -eq 0 ]] || prefix=DIE
-  if [[ -z "$msg" ]]; then
-    [ "$rc" -ne 0 ] || exit 0
-    _log "$prefix" "Program terminated with error: $rc"
-  else
-    _log "$prefix" "$msg"
-  fi
-
-  # Remove EXIT trap and exit nicely
-  trap '' EXIT
-  exit "$rc"
-}
-
-# Run command with dry mode support
-_exec() {
-  local cmd=("$@")
-  if ${APP_DRY:-false}; then
-    _log DRY "  | ${cmd[@]}"
-  else
-    _log RUN "  | ${cmd[@]}"
-    "${cmd[@]}"
-  fi
-}
-
-# Dump all application vars (debug)
-# shellcheck disable=SC2120 # Argument is optional by default
-_dump_vars() {
-  local prefix=${1:-APP_}
-  declare -p | grep " .. $prefix" >&2 || {
-    >&2 _log WARN "No var starting with: $prefix"
-  }
-}
-
-# Ensure a program is available
-_check_bin() {
-  local cmd cmds="${*:-}"
-  for cmd in $cmds; do
-    command -v "$1" >&/dev/null || return 1
-  done
-}
-
-# Internal helper to show bash traces (debug)
-# shellcheck disable=SC2120 # Argument is optional by default
-_sh_trace() {
-  local msg="${*}"
-
-  (
-    >&2 printf "%s\n" "TRACE: line, function, file"
-    for i in {0..10}; do
-      trace=$(caller "$i" 2>&1 || true)
-      if [ -z "$trace" ]; then
-        continue
-      else
-        printf "%s\n" "$trace"
-      fi
-    done | tac | head -n -1
-    [ -z "$msg" ] || >&2 printf "%s\n" "TRACE: Bash trace: $msg"
-  )
-}
-
-# Internal function to catch errors
-# Usage: trap '_sh_trap_error $? ${LINENO} trap_exit 42' EXIT
-_sh_trap_error() {
-  local rc=$1
-  [[ "$rc" -ne 0 ]] || return 0
-  local line="$2"
-  local msg="${3-}"
-  local code="${4:-1}"
-  set +x
-
-  _log ERR "Uncatched bug:"
-  _sh_trace # | _log TRACE -
-  if [[ -n "$msg" ]]; then
-    _log ERR "Error on or near line ${line}: ${msg}; got status ${rc}"
-  else
-    _log ERR "Error on or near line ${line}; got status ${rc}"
-  fi
-  exit "${code}"
-}
-
-# Extra libs
-# =================
-
-# Ask the user to confirm
-_confirm() {
-  local msg="Do you want to continue?"
-  >&2 printf "%s" "${1:-$msg}"
-  >&2 printf "%s" "([y]es or [N]o): "
-  export REPLY=
-
-  >&2 read -r REPLY
-  case $(tr '[A-Z]' '[a-z]' <<<"$REPLY") in
-  y | yes)
-    # printf "%s\n" "true"
-    return 0
-    ;;
-  *)
-    # printf "%s\n" "false"
-    return 1
-    ;;
-  esac
-}
-
-# Ask the user to input string
-_input() {
-  local msg="Please enter input:"
-  local default=${2-}
-  >&2 printf "%s" "${1:-$msg}${default:+ [$default]}: "
-  >&2 read -r REPLY
-  [[ -n "$REPLY" ]] || REPLY=${default}
-  printf "%s\n" "$REPLY"
-}
-
-# Ask the user to input string
-_input2() {
-  local default=${1-}
-  local msg=${2:-"Please enter input"}
-  local status=true
-  export REPLY=
-
-  while $status; do
-    >&2 printf "%s" "${msg}${default:+ [$default]}: "
-    >&2 read -r REPLY
-    [[ -n "$REPLY" ]] || REPLY=${default}
-    status=false
-  done
-
-  # printf "%s\n" "$REPLY"
-}
-
-_input_pass() {
-  local msg=${1:-"Please enter password"}
-  local status=true
-  export REPLY=
-
-  while $status; do
-    >&2 printf "%s" "${msg}: "
-    >&2 read -s -r REPLY
-
-    >&2 echo ""
-    if [[ -z "$REPLY" ]]; then
-      _log WARN "Empty password, please try again."
-    else
-      status=false
-    fi
-  done
-
-}
-
-# Transform yaml to json
-_yaml2json() {
-  python3 -c 'import json, sys, yaml ; y = yaml.safe_load(sys.stdin.read()) ; print(json.dumps(y))'
-}
-
-# CLI helpers
-# =================
-
-# Dispatch command
-clish_dispatch() {
-  local prefix=$1
-  local cmd=${2-}
-  shift 2 || true
-  [ -n "$cmd" ] || _die 3 "Missing command name, please check usage"
-
-  if [[ $(type -t "${prefix}${cmd}") == function ]]; then
-    "${prefix}${cmd}" "$@"
-  else
-    _log ERROR "Unknown command for ${prefix%%_?}: $cmd"
-    return 3
-  fi
-}
-
-# Parse command options
-# Called function must return an args array with remaining args
-clish_parse_opts() {
-  local func=$1
-  shift
-  clish_dispatch "$func" _options "$@"
-}
-
-# Read CLI options for a given function/command
-# Options must be in a case statement and surounded by
-# 'parse-opt-start' and 'parse-opt-stop' strings. Returns
-# a list of value separated by ,. Fields are:
-clish_help_options() {
-  local func=$1
-  local data=
-
-  # Check where to look options function
-  if declare -f "${func}_options" >/dev/null; then
-    func="${func}_options"
-    data=$(declare -f "$func")
-    data=$(printf "%s\n%s\n" 'parse-opt-start' "$data")
-  else
-    data=$(declare -f "$func")
-  fi
-
-  # declare -f ${func} \
-  echo "$data" | awk '/parse-opt-start/,/parse-opt-stop/ {print}' |
-    grep --no-group-separator -A 1 -E '^ *--?[a-zA-Z0-9].*)$' |
-    sed -E '/\)$/s@[ \)]@@g;s/.*: "//;s/";//' |
-    xargs -n2 -d'\n' |
-    sed 's/ /,/;/^$/d'
-}
-
-# List all available commands starting with prefix
-clish_help_subcommands() {
-  local prefix=${1:-cli__}
-  declare -f |
-    grep -E -A 2 '^'"$prefix"'[a-z0-9]*(__[a-z0-9]*)*? \(\)' |
-    sed '/{/d;/--/d;s/'"$prefix"'//;s/ ()/,/;s/";$//;s/^  *: "//;' |
-    xargs -n2 -d'\n' |
-    sed 's/, */,/;s/__/ /g;/,,$/d'
-}
-
-# Show help message of a function
-clish_help_msg() {
-  local func=$1
-  clish_dispatch "$func" _usage 2>/dev/null || true
-}
-
-# Show cli usage for a given command
-clish_help() {
-  : ",Show this help"
-  local func=${1:-cli}
-  local commands='' options='' message='' output=''
-
-  # Help message
-  message=$(clish_help_msg $func)
-
-  # Fetch command options
-  options=$(
-    while IFS=, read -r flags meta desc _; do
-      if [ -n "${flags:-}" ]; then
-        printf "  %-16s  %-20s  %s\n" "$flags" "$meta" "$desc"
-      fi
-    done <<<"$(clish_help_options $func)"
-  )
-
-  # Fetch sub command informations
-  commands=$(
-    while IFS=, read -r flags meta desc _; do
-      if [ -n "${flags:-}" ]; then
-        printf "  %-16s  %-20s  %s\n" "$flags" "$meta" "$desc"
-      fi
-    done <<<"$(clish_help_subcommands ${func}__)"
-  )
-
-  # Display help message
-  printf "%s\n" "${message:+$message}
-${commands:+
-commands:
-$commands}
-${options:+
-options:
-$options
-}"
-
-  # Append extra infos
-  if ! [[ "$func" == *"_"* ]]; then
-    cat <<EOF
-info:
-  author: $APP_AUTHOR ${APP_EMAIL:+<$APP_EMAIL>}
-  version: ${APP_VERSION:-0.0.1}-${APP_STATUS:-beta}${APP_DATE:+ ($APP_DATE)}
-  license: ${APP_LICENSE:-MIT}
-EOF
-  fi
-
-}
-
-# Low level helpers
-# =================
-
-# Ensure a directory exists
-ensure_dir() {
-  local target=$1
-
-  [[ -d "$target" ]] || _exec mkdir -p "$target"
-
-}
-
-# Return relative path from project root
-make_rel_path_from_root() {
-  sed -E "s:^$PROJECT_ROOT/?::"
-}
-
-# VALIDATED
-# Return hash of string
-hash_sum() {
-  local seed=$1
-  if [[ "$seed" == '-' ]]; then
-    sha256sum - | sed 's/ .*//'
-  else
-    echo -n "$seed" | sha256sum | sed 's/ .*//'
-  fi
-
-}
-
-# Ensure a config is correctly patched
-patch_file() {
-  local file="$1"
-  local key_name="$2"
-  local content
-  local delim_key=ssh_config
-  content=$(cat -)
-
-  # Prepare delimiters
-  local start_delimiter="# --- Start: $APP_NAME $delim_key $key_name ---"
-  local stop_delimiter="# --- Stop: $APP_NAME $delim_key $key_name ---"
-
-  # Ensure destination exists
-  if [[ ! -f "$file" ]]; then
-
-    local parent=$(dirname "${file}")
-    if [[ -z "$parent" ]] && [[ ! -d "$parent" ]]; then
-      _log INFO "Create missing parent directory: $parent"
-      ensure_dir "$parent"
-    fi
-
-    _log INFO "Create new empty file: $file"
-    _exec touch "$file"
-  fi
-
-  # Create payload
-  local payload="$start_delimiter
-$content
-$stop_delimiter"
-
-  if grep -q "$start_delimiter" "$file" && grep -q "$stop_delimiter" "$file"; then
-
-    # Delimiters exist, check if update is needed
-    local current_content='' content_before='' content_after=''
-
-    # Calculate line indexes
-    local line_sof=1
-    local line_start=$(grep -n "$start_delimiter" "$file" | cut -f1 -d: | head -n 1)
-    local line_stop=$(grep -n "$stop_delimiter" "$file" | cut -f1 -d: | head -n 1)
-    local line_eof=$(wc -l "$file" | cut -d' ' -f1)
-
-    line_stop=$((line_stop + 1))
-    current_content=$(sed -n "${line_start},${line_stop}p;" "$file")
-
-    _log TRACE "Line separators: $line_sof -> $line_start -> $line_stop -> $line_eof"
-
-    if [ "$current_content" != "$payload" ]; then
-      # Update needed
-      _log INFO "Update content of: $file"
-
-      # Update content
-      if ! $APP_DRY; then
-        (
-          if [[ "$line_start" -gt 1 ]]; then
-            sed -n "1,${line_start}p;" "$file" | sed '$ d'
-          fi
-          echo "$payload"
-          if [[ "$line_stop" -lt $line_eof ]]; then
-            sed -n "${line_stop},\$p" "$file" #| sed '1 d'
-          fi
-        ) >"$file.tmp"
-        mv "$file.tmp" "$file"
-      else
-        _log DRY "Update file: $file"
-      fi
-
-    else
-      _log INFO "File '$file' is already correctly configured"
-    fi
-    set +x
-  else
-
-    # TOFIX: Insert before Host *
-    # local line_start=$(grep -n "Host *" "$file" | cut -f1 -d: | head -n 1)
-
-    # Delimiters don't exist, append to the end of the file
-    _log INFO "Add to content to: $file"
-    if ! $APP_DRY; then
-      echo -e "\n$payload" >>"$file"
-    else
-      _log DRY "Update file: $file"
-    fi
-  fi
-}
-
-# DB Commands
-# =================
-
-# VALIDATED
-_db() {
-  local config=$1
-  shift 1
-  _log TRACE "Query db: git-db -s '$config' $@"
-  git-db -s "$config" "$@" 2>/dev/null
-}
-
-# Ensure workspace is unlocked
-_db_ensure_open() {
-  if [[ ! -f "$APP_CONFIG_FILE" ]]; then
-
-    if [[ ! -f "$APP_CONFIG_FILE_ENC" ]]; then
-      _log INFO "Create a new config file: $APP_CONFIG_FILE"
-      _exec git-db init "$APP_CONFIG_FILE" #2>/dev/null
-    else
-      _die 1 "You must unlock repo first!"
-    fi
-  fi
-}
-
-# VALIDATED
-# Directory DB
-_dir_db() {
-
-  # TO BE REMOVED LATER
-  # Ensure config is present
-  if [[ ! -f "$APP_CONFIG_FILE" ]]; then
-
-    if [[ ! -f "$APP_CONFIG_FILE_ENC" ]]; then
-      _log INFO "Create a new config file: $APP_CONFIG_FILE"
-      _exec git-db init "$APP_CONFIG_FILE" #2>/dev/null
-    else
-      _die 1 "You must unlock repo first!"
-    fi
-
-  fi
-
-  # Call db backend
-  local xtra_args=
-  ${APP_DRY} && xtra_args='-n'
-  _db "$APP_CONFIG_FILE" $xtra_args "$@"
-
-}
-
-# Transform db dump into vars.
-# TOFIX: How it works with multilines ?
-_db_to_vars() {
-  sed -E "s/\./__/;s/\./__/;s/=/='/;s/$/'/;s/^/db__/"
-}
-
-# Git commands
-# =====================
-
-is_in_git() {
-  local file=$1
-  if git status --porcelain "$file" | grep -q '^?? '; then
-    return 1
-  fi
-  return 0
-}
-
-is_in_git_clean_stage() {
-  local file=$1
-  local ret=$(git status --porcelain "$file")
-  if [[ -z "$ret" ]]; then
-    return 0
-  elif grep -q '^A ' <<<"$ret"; then
-    return 0
-  fi
-  return 1
-}
-
-ensure_file_in_git() {
-  local file=$1
-
-  if is_in_git_clean_stage "$file"; then
-    _log DEBUG "File is already in git"
-  else
-    _log DEBUG "Add encrypted file into git"
-    _exec git add "$file"
-  fi
-}
-
-# Return true if local and remote branch have diverged
-_is_git_diverged ()
-{
-  local banch_name=${1:-main}
-  local count=$(git show-ref $banch_name | awk '{print $1}' | sort -u | wc -l)
-
-  if [[ "$count" -eq 1 ]]; then
-    return 1
-  elif [[ "$count" -eq 2 ]]; then
-    return 0
-  else
-    return 2
-  fi
-}
-
-
-# Age commands
-# =====================
-
-# Return true if age encrypted
-is_age_encrypted_file() {
-  local file=$1
-  local ret=1
-
-  [[ -f "$file" ]] || return 1
-
-  if grep -q "BEGIN AGE ENCRYPTED FILE-----" "$file"; then
-    ret=0
-  elif grep -q "age-encryption.org/v1" "$file"; then
-    ret=0
-  fi
-
-  return $ret
-}
-
-# Passwordless decrypt
-_age_decrypt_with_ident() {
-  load_ident_password || return $?
-
-  [[ -n "$APP_IDENT_PRIV_KEY" ]] || _die 1 "Missing ident private key"
-  _log DEBUG "Decrypt with age and internal priv key"
-  age --decrypt \
-    --identity <(echo "$APP_IDENT_PRIV_KEY") "$@"
-
-  return $?
-
-}
-
-# Encrypt a file with age
-_age_encrypt_file() {
-  local file=$1
-  local recipient=$2
-
-  local dest=${3:-$file}
-
-  # shellcheck disable=SC2086
-  cat "$file" | age --encrypt \
-    --armor \
-    --recipient ${recipient//,/ --recipient } \
-    -o "$dest"
-}
-
-# Decrypt a file with age
-_age_decrypt_file() {
-  local file=$1
-  local ident=$2
-  local dest=${3:-$file}
-
-  # load_ident "$ident"
-
-  ident=${ident:-$APP_USER_IDENTITY_CRYPT_TARGET}
-
-  _exec _age_decrypt_with_ident -o "$dest" "$file"
-}
-
-_age_public_key_from_private_key() {
-  local file=$1
-  local priv_key='' pub_key=''
-
-  priv_key=$(age --decrypt "$file" 2>/dev/null)
-  echo "$priv_key" | age-keygen -y
-
-}
-
-# Transform a list of recipients in age args
-_age_build_recipients_args() {
-  local pub_keys=$@
-  local ret=
-
-  pub_keys=$(tr '\n' ' ' <<<"$pub_keys")
-  for recipient in $pub_keys; do
-    ret="${ret:+$ret }-r $recipient"
-  done
-  [[ -n "$ret" ]] || return 1
-  printf "%s" "$ret"
-}
-
-# Internal helpers
-# =================
-
-make_default_ident() {
-  local name=$1
-  [[ -f "$APP_USER_IDENTITY_FILE" ]] || {
-    _die 1 "No such identiry: $name"
-  }
-  echo "$name" >"$APP_CURR_ID_FILE"
-}
-
-assert_current_ident() {
-  [[ -n "$APP_CURR_IDENT" ]] || _die 1 "You must setup an ident first"
-}
-
-lib_keyring_is_unlocked() {
-  local closed=
-
-  if ! command -v "secret-tool" &>/dev/null; then
-    _log DEBUG "Keyring disabled: Missing 'secret-tool' command"
-    return 1
-  fi
-
-  if command -v "busctl" &>/dev/null; then
-    closed=$(
-      busctl --user get-property org.freedesktop.secrets \
-        /org/freedesktop/secrets/collection/login \
-        org.freedesktop.Secret.Collection Locked |
-        grep -o 'true\|false'
-    )
-  elif command -v "gdbus" &>/dev/null; then
-    closed=$(
-      gdbus call -e -d org.freedesktop.secrets \
-        -o /org/freedesktop/secrets/collection/login \
-        -m org.freedesktop.DBus.Properties.Get \
-        org.freedesktop.Secret.Collection Locked |
-        grep -o 'true\|false'
-    )
-  else
-    _log INFO "Please install 'busctl' or 'gdbus' to query state of keyring"
-    closed=false
-  fi
-
-  if [[ "$closed" == "false" ]]; then
-    _log DEBUG "Keyring is available and open"
-    return 0
-  fi
-
-  _log DEBUG "Keyring is not open"
-  return 1
-}
-
-keyring_get_best_secret() {
-  local ident=$1
-  local live_secret=
-
-  lib_keyring_is_unlocked || return 0
-
-  if [[ "$APP_IDENT_FILE_STATUS" == "encrypted" ]]; then
-    _log INFO "Using keyring password for ident: $ident"
-    secret-tool lookup "${APP_NAME}-ident" "$ident" 2>/dev/null || true
-  fi
-
-}
-
-ensure_file_encrypted() {
-  local file=$1
-  local recipient_name=${2:-$APP_CURR_IDENT}
-  local recipient=$(get_recipiant_id "$recipient_name")
-
-  if is_age_encrypted_file "$file"; then
-    _log DEBUG "File is already encrypted"
-  else
-    _log INFO "Encrypt file: $file for $recipient_name"
-    _exec _age_encrypt_file "$file" "$recipient"
-  fi
-
-}
-
-ensure_file_in_gitattr() {
-  local name=$1
-  local suffix="filter=sops"
-  local pattern="$name $suffix"
-  if grep -q "^$pattern" "$APP_GITATTR_FILE" 2>/dev/null; then
-    _log DEBUG "File is already in $APP_GITATTR_FILE"
-    return 0
-  fi
-  _log INFO "Add file to .gitattributes: $file"
-
-  if ${APP_DRY:-false}; then
-    _log DRY "Update file: $APP_GITATTR_FILE"
-  else
-    _log INFO "Update file: $APP_GITATTR_FILE"
-    echo "$pattern" >>"$APP_GITATTR_FILE"
-  fi
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Directory management
-# =================
-
-lib_dir_add_ident() {
-  _dir_db
-
-}
-
-# Return all age pubkeys
-lib_dir_age_pubkeys() {
-  _dir_db dump ident | grep age-pub= | sed -E 's/[a-zA-Z0-9\.-]*=//'
-}
-
-# Identity management (internal)
-# =================
-
-get_recipiant_id() {
-  local name=$1
-
-  local dest_inv="${APP_INV_DIR}/$name.pub"
-  cat "$dest_inv"
-}
-
-get_id_file_of_ident() {
-  local ident=$1
-
-  local hash=
-  hash=$(_dir_db get "ident.$ident.ident-hash")
-
-  echo "$APP_IDENT_DIR/$hash.age"
-}
-
-# Load dump into shell
-lib_id_as_vars() {
-  # Reset env
-  # shellcheck disable=SC2086
-  unset ${!db_ident__*} || true
-
-  # Load
-  local db_exc=$(lib_id_dump | _db_to_vars)
-  echo "$db_exc"
-  eval "${db_exc}"
-
-}
-
-# Return all ident pub keys from directory
-lib_id_get_all_pub_keys() {
-  _dir_db dump |
-    grep '^ident\.[a-zA-Z-]*\.age-pub=' |
-    sed 's/.*=//'
-}
-
-# VALIDATED
-# Dump all idents
-lib_id_dump() {
-  _dir_db dump | grep '^ident\.'
-}
-
-# VALIDATED
-# List identities
-lib_id_list() {
-  lib_id_dump |
-    grep 'email\|login' |
-    sed 's/^ident\.//;s/\..*//' |
-    sort -u
-}
-
-# VALIDATED
-# Check if ident exists
-lib_id_exists() {
-  local id=$1
-  grep -q "$id" <<<"$(lib_id_list)"
-}
-
-# Identity management (Public)
-# =================
-
-# VALIDATED
-# Generate new encrypted id
-lib_id_new_ident__age() {
-  local ident=$1
-  local priv_key= pub_key=
-
-  # Ensure id does not already exists in config
-  if lib_id_exists "$ident"; then
-    _die 0 "Identity '$ident' already exists."
-  fi
-
-  # Load ident settings
-  load_ident "$ident"
-
-  # Check if destinayion already exists
-  if [[ -f "$APP_IDENT_FILE_ENC" ]]; then
-    _log INFO "A age secret ident file is already present in: $APP_IDENT_FILE_ENC"
-    $APP_FORCE ||
-      _confirm "Do you really want to override '${APP_IDENT_NAME}' existing identity ?" ||
-      _die 1 "User aborted"
-  fi
-
-  # Create identity
-  _log INFO "Create new age id: $APP_IDENT_NAME"
-  priv_key="$(age-keygen)"
-
-  # Save into dedicated file
-  ensure_dir "$APP_IDENT_DIR"
-  pub_key=$(echo "$priv_key" | age-keygen -y)
-  if ! $APP_DRY; then
-    echo "$priv_key" | age --passphrase -a >"$APP_IDENT_FILE_ENC"
-  else
-    _log DRY "Save generated keypair in: $APP_IDENT_FILE_ENC"
-  fi
-
-  # Save in DB
-  _dir_db set "ident.$APP_IDENT_NAME.ident-hash" "$APP_IDENT_HASH"
-  _dir_db set "ident.$APP_IDENT_NAME.age-pub" "$pub_key"
-
-  _log INFO "New private encrypted identity file: $APP_IDENT_FILE_ENC"
-}
-
-# Remove identity
-lib_id_rm_ident__age() {
-  local ident=$1
-  local changed=false
-
-  load_ident "$ident"
-
-  # Ensure id does exists in config
-  if lib_id_exists "$APP_IDENT_NAME"; then
-    $APP_FORCE ||
-      _confirm "Do you really want to remove '${APP_IDENT_NAME}' identity ?" ||
-      _die 1 "User aborted"
-    changed=true
-  fi
-
-  # Look for key to remove
-  _dir_db rms "ident.$APP_IDENT_NAME" --remove-section
-
-  # Delete identification key
-  for file in "$APP_IDENT_FILE_ENC" "$APP_IDENT_FILE_CLEAR"; do
-    [[ ! -f "$file" ]] || {
-      _log INFO "Remove identiry file: $file"
-      _exec rm "$file"
-      changed=true
-    }
-  done
-
-  if $changed; then
-    _log INFO "Identity '$APP_IDENT_NAME' has been removed"
-  else
-    _log INFO "Identity '$APP_IDENT_NAME' is already absent"
-  fi
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# Vault management (internal)
-# =================
-
-# List vault names in config
-# DEPRECATED, use: item_list_names instead
-# vault_list_names() {
-#   _dir_db dump "vault." |
-#     sed 's/^vault.//;s/\..*//' |
-#     sort -u
-# }
-
-# List all vault that belong to ident
-# vault_list_names_for_id() {
-#   local ident=$1
-
-#   _dir_db dump "vault." |
-#     grep "=$ident$" |
-#     sed 's/^vault.//;s/\..*//' |
-#     sort -u
-# }
-
-# List opened vaults
-# lib_vault_opened_names() {
-#   local vaults=$(item_list_names $kind)
-#   for name in $vaults; do
-#     [[ -d "$APP_VAULTS_DIR/$name" ]] && echo "$name"
-#   done
-# }
-
-# Check if a vault exists
-# DEPRECATED, use: item_assert_exists instead
-# vault_assert_exists() {
-#   local name=$1
-#   item_list_names $kind | grep -q "^$name$"
-#   return $?
-# }
-
-# Vault management (public)
-# =================
-
-# Create an new opened vault
-lib_vault_new() {
-  local vault_name=$1
-  shift 1
-  local idents=${@:-}
-
-  # Create new item
-  item_new vault "$vault_name" "$idents"
-
-  # Create vault
-  local vault_dest="$APP_VAULTS_DIR/$vault_name"
-  ensure_dir "$vault_dest"
-  echo "Hello world" >>"$vault_dest/README.md"
-
-  _log INFO "New vault created in: $vault_dest"
-
-}
-
-# Remove and delete vault
-lib_vault_rm() {
-  local vault_name=$1
-  item_rm vault "$vault_name"
-}
-
-
-# Push changes and clean
-lib_vault_lock() {
-  local vault_name=$1
-
-  local ret=''
-  item_push vault "$vault_name"
-  ret=$?
-
-  # Validate
-  [[ "$ret" -eq "0" ]] ||
-    _die "$ret" "Some errors happened, did not remove local data!"
-
-  # Cleanup
-  _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
-  _log INFO "Vault '$vault_name' closed successfully."
-
-}
-
-# Decrypt and open vault
-lib_vault_unlock() {
-  local vault_name=$1
-  shift 1
-  local ident=${@:-}
-
-  item_pull vault "$vault_name" "$ident"
-}
-
-
-
-
-
-
-
-# Item management (internal)
-# =================
-
-
-
-## Multi kind functions
-#  ------
-APP_ITEMS_KINDS="vault gitvault"
-
-
-# List opened vaults
-item_opened_secrets() {
-  local kinds=${1:-$APP_ITEMS_KINDS}
-  local ident=${2:-}
-
-
-  for kind in $kinds; do
-
-    if [[ -n "$ident" ]]; then
-      local vaults=$(item_ident_resources "$ident"  "$kind")
-    else
-      local vaults=$(item_list_names "$kind")
-    fi
-
-    for name in $vaults; do
-      [[ -d "$APP_VAULTS_DIR/$name" ]] && echo "$name"
-    done
-  done
-}
-
-# Sync all items
-items_push_opened (){
-  local ident=$1
-  local kinds=$APP_ITEMS_KINDS
-  # Check all opened vaults
-  for kind in $kinds; do
-    for vault in $(item_opened_secrets "$kind" "$ident"); do
-      _log INFO "Pushing vault: $vault"
-      item_push "$kind" "$vault"
-    done
-  done
-}
-
-# Pull all items
-items_pull_opened (){
-  local ident=$1
-  local kinds=$APP_ITEMS_KINDS
-  # Check all opened vaults
-  for kind in $kinds; do
-    for vault in $(item_opened_secrets "$kind" "$ident"); do
-      _log INFO "Pulling vault: $vault"
-      item_pull "$kind" "$vault" "$ident"
-    done
-  done
-}
-
-## Per kind functions
-#  ------
-
-# Return item's kind
-item_kind (){
-  local ident=$1
-
-  _dir_db dump |
-    grep "\.$ident\." |
-    cut -d'.' -f1 |
-    sort -u |
-    head -n 1
-}
-
-# List related resources for ident
-item_ident_resources() {
-  local ident=$1
-  local kinds=${2:-$APP_ITEMS_KINDS}
-
-  for kind in $kinds; do
-    
-    _dir_db dump "$kind." |
-      grep "=$ident$" |
-      sed 's/^'"$kind"'.//;s/\..*//' |
-      sort -u
-  done
-}
-
-# Get item name from hash
-item_name_from_hash() {
-  local needle=$1
-  local kinds=${2:-$APP_ITEMS_KINDS}
-
-  for kind in $kinds; do
-    
-    _dir_db dump "$kind." |
-      grep "store-hash=$needle$" |
-      sed 's/^'"$kind"'.//;s/\..*//' |
-      sort -u
-  done
-}
-
-# List all resources of kind
-item_list_names() {
-  local kind=$1
-  _dir_db dump "$kind." |
-    sed 's/^'"$kind"'.//;s/\..*//' |
-    sort -u
-}
-
-# Check if a given kind resource exist
-item_assert_exists() {
-  local kind=$1
-  local name=$2
-
-  item_list_names "$kind" | grep -q "^$name$"
-  return $?
-}
-
-
-# Return all recipients ids for a given vault
-item_recipient_idents() {
-  local kind=$1
-  local vault_name=$2
-  _dir_db get "$kind.$vault_name.recipient" |
-    sort -u
-}
-
-# Return age pub_keys from recipients
-item_recipient_idents_age_args() {
-  local kind=$1
-  local vault_name=$2
-  local idents=
-  idents=$(item_recipient_idents "$kind" "$vault_name")
-
-  local ret=
-  for ident in $idents; do
-    match=$(_dir_db get "ident.$ident.age-pub")
-    if [[ -n "$match" ]]; then
-      ret="${ret:+$ret }$match"
-    else
-      _log WARN "Impossible to get public key of ident: $ident"
-    fi
-  done
-
-  [[ -n "$ret" ]] || return 1
-  _age_build_recipients_args "$ret"
-}
-
-
-
-# Create a new item in config
-# Asssert item does not already exists
-# Check recipients
-# Create store-hash
-# Add recipients to config
-# Continue if not fails
-# Kind: vault, gitvault ...
-item_new() {
-  local kind=$1
-  local vault_name=$2
-  shift 2
-  local idents=${@:-}
-
-  local valid=false
-
-  # Sanity check
-  item_assert_exists "$kind" "$vault_name" &&
-    _die 0 "Vault '$vault_name' already exists."
-  
-  # Check recipients
-  [[ -n "$idents" ]] || _die 1 "Missing recipient(s)"
-  for ident in $idents; do
-    [[ -n "$ident" ]] || continue
-    lib_id_exists "$ident" ||
-      _die 1 "Ident '$ident' does not exists"
-  done
-
-  # Save in DB
-  for ident in $idents; do
-    [[ -n "$ident" ]] || continue
-    _dir_db add "$kind.$vault_name.recipient" "$ident"
-    valid=true
-  done
-
-  if ! $valid; then
-    _die 1 'Missing valid idents, abort !'
-  fi
-
-  # Create hash
-  _log INFO "Create new $kind '$vault_name' for: $idents"
-  local vault_hash=$(hash_sum "$vault_name")
-  _dir_db set "$kind.$vault_name.store-hash" "$vault_hash"
-
-}
-
-
-# Remove an item from config
-item_rm() {
-  local kind=$1
-  local vault_name=$2
-  local changed=false
-
-  # Build vars
-  local vault_hash=$(_dir_db get "$kind.$vault_name.store-hash")
-  local vault_enc="$APP_STORES_DIR/$vault_hash.age"
-  local vault_dir="$APP_VAULTS_DIR/$vault_name"
-
-  # Sanity checks
-  [[ -n "$vault_hash" ]] || _die 1 "Could not get $kind store hash"
-
-  # Clear encrypted file
-  if [[ -f "$vault_enc" ]]; then
-    _log INFO "Delete encrypted $kind file: $vault_enc"
-    rm "$vault_enc"
-    changed=true
-  fi
-
-  # Clear opened dir
-  if [[ -d "$vault_dir" ]]; then
-    local erase=false
-
-    if $APP_FORCE; then
-      erase=true
-    else
-      erase=false
-      _confirm \
-        "Do you want to delete directory '$vault_dir' data ?" &&
-        erase=true
-    fi
-
-    if $erase; then
-      _log INFO "Delete local secret data in '$vault_dir'"
-      _exec rm -rf "$vault_dir"
-      changed=true
-    else
-      _log WARN "Local secret data in '$vault_dir' wont be deleted!"
-    fi
-  fi
-
-  # Clear configuration
-  if item_assert_exists "$kind" "$vault_name"; then
-    _dir_db rms "$kind.$vault_name"
-    changed=true
-  fi
-
-  # report to user
-  if $changed; then
-    _log INFO "$kind '$vault_name' has been removed"
-  else
-    _log INFO "$kind '$vault_name' does not exists"
-  fi
-
-}
-
-
-
-# Push secrets into encrypted file
-item_push() {
-  local kind=$1
-  local vault_name=$2
-  # local vault_dir=${3:-}
-
-  # Guess vault_dir
-  # if [[ -z "$vault_dir" ]]; then
-  case "$kind" in
-    vault) 
-      vault_dir="$APP_VAULTS_DIR/$vault_name"
-      ;;
-    gitvault) 
-      vault_dir="$APP_SPOOL_DIR/$vault_name"
-      ;;
-  esac
-  # fi
-
-  # Build vars
-  local vault_hash=$(_dir_db get "$kind.$vault_name.store-hash")
-  local vault_enc="$APP_STORES_DIR/$vault_hash.age"
-  # local vault_dir="$APP_VAULTS_DIR/$vault_name"
-
-  # Sanity checks
-  item_assert_exists "$kind" "$vault_name" ||
-    _die 1 "Unknown $kind: '$vault_name', available names are: $(item_list_names "$kind" | tr '\n' ',')"
-  [[ -d "$vault_dir" ]] || {
-    _log DEBUG "$kind '$vault_name' already closed/locked"
-    return 0
-  }
-  [[ -n "$vault_hash" ]] || _die 1 "Could not get $kind store-hash"
-
-  # Gitvault specificties
-  if [[ "$kind" == "gitvault" ]]; then
-    local target_dir="$APP_VAULTS_DIR/$vault_name"
-    if [[ -d "$target_dir" ]]; then
-      _log DEBUG "Push local change to gitvault"
-      _exec git -C "$target_dir" push 2>/dev/null
-    else
-      _log DEBUG "Skip git push because vault not mounted"
-    fi
-  fi
-
-  # Fetch recipients
-  age_recipient_args=$(item_recipient_idents_age_args "$kind" "$vault_name")
-  [[ -n "$age_recipient_args" ]] || _die 1 "No $kind identity matched for: $vault_name"
-
-  # Encrypt
-  local content_checksum=$(tar -czf - -C "$vault_dir" . | hash_sum -)
-  local old_checksum=$(_dir_db get "$kind.$vault_name.checksum")
-
-  local ret=0
-  local changed="without changes"
-  if [[ "$old_checksum" == "$content_checksum" ]]; then
-    _log DEBUG "No changes in $kind, not reencrypting"
-  else
-    changed="with changes"
-    _log DEBUG "Changes detected in $kind, rencrypting data"
-    if ! $APP_DRY; then
-      _dir_db set "$kind.$vault_name.checksum" "$content_checksum"
-      ensure_dir "$APP_STORES_DIR"
-      # shellcheck disable=SC2086
-      tar -czf - -C "$vault_dir" . | age --encrypt --armor -output "$vault_enc" $age_recipient_args
-      ret=$?
-    else
-      _log DRY "Update encrypted file: $vault_enc"
-    fi
-  fi
-
-  _log INFO "$kind '$vault_name' pushed successfully $changed."
-
-}
-
-# Fech secret from encrypted data
-item_pull (){
-  local kind=$1
-  local vault_name=$2
-  local ident=${3:-}
-  local vault_dir='' #$3
-
-  # Guess vault_dir
-  case "$kind" in
-    vault) 
-      vault_dir="$APP_VAULTS_DIR/$vault_name"
-      ;;
-    gitvault) 
-      vault_dir="$APP_SPOOL_DIR/$vault_name"
-      ;;
-  esac
-
-  # Build vars
-  local vault_hash=$(_dir_db get "$kind.$vault_name.store-hash")
-  local vault_enc="$APP_STORES_DIR/$vault_hash.age"
-  # local vault_dir="$APP_VAULTS_DIR/$vault_name"
-
-  # Sanity check
-  item_assert_exists "$kind" "$vault_name" ||
-    _die 1 "Unknown $kind: '$vault_name', available names are: $(item_list_names "$kind" | tr '\n' ',')"
-  # TMP: [[ ! -d "$vault_dir" ]] || _die 0 "Already opened in $vault_dir"
-  [[ -n "$vault_hash" ]] || _die 1 "Could not get $kind store-hash"
-
-  # Fetch default recipients
-  if [[ -z "$ident" ]]; then
-    ident=$(item_recipient_idents "$kind" "$vault_name")
-    local count=$(wc -l <<<"$ident")
-    if [[ "$count" -eq 0 ]]; then
-      _die 1 "Failed to fetch $kind associated ids: $vault_name"
-    elif [[ "$count" -gt 1 ]]; then
-      # TODO: Allow ot manage current ID
-      ident_names=$(xargs <<<"$ident")
-      _die 1 "Too many ids for $kind '$vault_name', choose one of: ${ident_names// /,}"
-    fi
-  fi
-
-  # echo "PASS IDENT LOADING"
-  # echo "vault_hash=$vault_hash"
-  # echo "vault_enc=$vault_enc"
-  # echo "vault_dir=$vault_dir"
-  # echo "ident=$ident"
-  # echo ""
-
-  # Load ident
-  load_ident "$ident"
-
-  _log DEBUG "Opening '$vault_enc' with ident '$ident' in: $vault_dir"
-  ensure_dir "$vault_dir"
-  if ! $APP_DRY; then
-    _age_decrypt_with_ident \
-      --output - "$vault_enc" | tar -xz -C "$vault_dir"
-    local rc=$?
-
-    if [[ "$rc" -ne 0 ]]; then
-      _exec rmdir "$vault_dir"
-      _die 1 "Failed to decrypt file: $vault_enc"
-    fi
-  fi
-
-  # Do gitvault specificties
-  if [[ "$kind" == "gitvault" ]]; then
-    local target_dir="$APP_VAULTS_DIR/$vault_name"
-
-    if [[ -d "$target_dir" ]]; then
-      _log DEBUG "Pull from local remote"
-      _exec git -C "$target_dir" pull --rebase >/dev/null
-    else
-      _log DEBUG "Clone from local remote"
-      ensure_dir "$target_dir"
-      _exec git clone "$APP_SPOOL_DIR/$vault_name" "$target_dir" >/dev/null
-    fi
-  fi
-
-  _log INFO "Vault '$vault_name' pulled successfully in $vault_dir"
-
-}
-
-
-# GitVault management (public)
-# =================
-
-# Create a new gitvault
-lib_gitvault_new () {
-  local vault_name=$1
-  shift 1
-  local idents=${@:-}
-
-  # Create new item
-  item_new gitvault "$vault_name" "$idents"
-
-  # Create git spool
-  local repo_spool="$APP_SPOOL_DIR/$vault_name"
-  git init --bare "$repo_spool"
-
-  # Create vault
-  local vault_dest="$APP_VAULTS_DIR/$vault_name"
-  git clone "$repo_spool" "$vault_dest" 2>/dev/null
-
-  _log INFO "New gitvault created in: $vault_dest"
-}
-
-
-# Remove and delete vault
-lib_gitvault_rm() {
-  local vault_name=$1
-  item_rm gitvault "$vault_name"
-
-  # Clean spool
-  local repo_spool="$APP_SPOOL_DIR/$vault_name"
-
-  [[ ! -e "$repo_spool" ]] || _exec rm -rf "$repo_spool"
-
-}
-
-
-# Push changes and clean
-lib_gitvault_lock() {
-  local vault_name=$1
-
-  local ret=''
-  item_push gitvault "$vault_name"
-  ret=$?
-
-  # Validate
-  [[ "$ret" -eq "0" ]] ||
-    _die "$ret" "Some errors happened, did not remove local data!"
-
-  # Cleanup
-  _exec rm -rf "$APP_SPOOL_DIR/$vault_name"
-  _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
-  _log INFO "gitvault '$vault_name' closed successfully."
-
-}
-
-# Decrypt and open vault
-lib_gitvault_unlock() {
-  local vault_name=$1
-  shift 1
-  local ident=${@:-}
-
-  item_pull gitvault "$vault_name" "$ident"
-
-  ensure_dir "$APP_VAULTS_DIR/$vault_name"
-  (
-    cd "$APP_VAULTS_DIR/$vault_name"
-    git clone "$APP_SPOOL_DIR/$vault_name" .
-  )
-  
-  _log INFO "gitvault '$vault_name' opened successfully."
-
-}
-
-
-# Push changes and clean
-lib_gitvault_push() {
-  local vault_name=$1
-
-  # local target_dir="$APP_VAULTS_DIR/$vault_name"
-  # if [[ -d "$target_dir" ]]; then
-  #   (
-  #     cd "$target_dir"
-  #     git push
-  #   )
-  # else
-  #   _log DEBUG "Skip git pull because vault not mounted"
-  # fi
-
-  # local ret=''
-  item_push gitvault "$vault_name"
-  # ret=$?
-
-  # # Validate
-  # [[ "$ret" -eq "0" ]] ||
-  #   _die "$ret" "Some errors happened, did not remove local data!"
-
-}
-
-# Decrypt and open vault
-lib_gitvault_pull() {
-  item_pull gitvault "$@"
-
-  # local vault_name=$1
-  # shift 1
-  # local ident=${@:-}
-
-
-  # local target_dir="$APP_VAULTS_DIR/$vault_name"
-
-  # if [[ -d "$target_dir" ]]; then
-  #   (
-  #     cd "$target_dir"
-  #     git pull
-  #   )
-  # else
-  #   ensure_dir "$target_dir"
-  #   (
-  #     cd "$target_dir"
-  #     git clone "$APP_SPOOL_DIR/$vault_name" .
-  #   )
-  # fi
-  
-  # _log INFO "gitvault '$vault_name' opened successfully."
-
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+source "$SCRIPT_LIB/cli_idents.sh"
+source "$SCRIPT_LIB/cli_gitvault.sh"
+source "$SCRIPT_LIB/cli_vault.sh"
 
 
 
 # Init loaders
 # =================
 
-# VALIDATED
+# Init loaders
+# =================
+
+# Init loaders
+# =================
+
+
 # Init app
 data_init() {
 
@@ -1674,30 +170,10 @@ load_ident_password() {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-# CLI General Commands
+# Metadata config
 # =================
 
-cli__conf() {
-  : "[ls|add|set|rm|get],Update donfiguration"
-
-  _dir_db "$@"
-
-}
-
-dir_lib_encrypt_meta() {
+cb_config_encrypt() {
   local dest_hash=$APP_CONFIG_FILE_HASH
   local _vaulted_file="${APP_STORES_DIR}/${dest_hash}.age"
   local vaulted_file=${1:-$_vaulted_file}
@@ -1714,10 +190,16 @@ dir_lib_encrypt_meta() {
   local ret=
 
   # Do the change ?
-  local curr_hash=$(cat "$APP_CONFIG_FILE" | hash_sum - )
-  local old_hash=$(cat ".HASH" 2>/dev/null )
+  local commited_content_hash=$(_age_decrypt_with_ident \
+    --output - "$vaulted_file" \
+    | hash_sum -
+    )
 
-  if [[ "$old_hash" == "$curr_hash" ]] ; then
+
+  local curr_hash=$(cat "$APP_CONFIG_FILE" | hash_sum - )
+  # local old_hash=$(cat ".HASH" 2>/dev/null )
+
+  if [[ "$commited_content_hash" == "$curr_hash" ]] ; then
     set +x
     _log INFO "No need to reencrypt config"
     
@@ -1739,7 +221,7 @@ dir_lib_encrypt_meta() {
 
 }
 
-dir_lib_decrypt_meta() {
+cb_config_decrypt() {
   local dest_hash=$APP_CONFIG_FILE_HASH
   local _vaulted_file="${APP_STORES_DIR}/${dest_hash}.age"
   local vaulted_file=${1:-$_vaulted_file}
@@ -1763,7 +245,7 @@ dir_lib_decrypt_meta() {
     return 0
   fi
   # cat "$tmp_dst" | hash_sum - > .HASH
-  echo -n "$new_hash" > .HASH
+  # echo -n "$new_hash" > .HASH
 
   if [[ -f "$dest" ]]; then
 
@@ -1807,95 +289,8 @@ dir_lib_decrypt_meta() {
   
 }
 
-cli__lock() {
-  : ",Lock all vaults"
 
-
-  _log DEBUG "Lock all vaults and config"
-
-
-  # # Check all opened vaults
-  # for vault in $(item_opened_secrets); do
-  #   _log DEBUG "Close vault: $vault"
-  #   cli__vault__close "$vault"
-  # done
-
-
-  if [[ -z "${1:-}" ]]; then
-    _die 1 "You must use an ident to unlock the vault"
-  fi
-  # set -x
-  load_ident "$1"
-
-
-  # Close secrets
-  local mode='all'
-  local kinds=${APP_ITEMS_KINDS}
-
-  for kind in $kinds; do
-
-    case "$mode" in
-    all)
-      for vault in $(item_ident_resources "$APP_IDENT_NAME" "$kind"); do
-        # _log INFO "Opening vault: $vault"
-        "lib_${kind}_lock" "$vault" "$APP_IDENT_NAME"
-      done
-      ;;
-    user)
-      if item_assert_exists "$kind" "$APP_IDENT_VAULT_NAME" ; then
-        _log INFO "Locking user vault for: $APP_IDENT_NAME"
-        "lib_${kind}_lock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
-      fi
-      ;;
-    esac
-  done
-
-
-  # Close config
-  dir_lib_encrypt_meta
-
-
-}
-
-cli__unlock() {
-  : "ID,Unlock config"
-
-  if [[ -z "${1:-}" ]]; then
-    _die 1 "You must use an ident to unlock the vault"
-  fi
-
-  load_ident "$1"
-
-  _log DEBUG "Unlock global config with ident: $APP_IDENT_NAME"
-
-  # Decrypt metadata
-  dir_lib_decrypt_meta
-
-  # Open secrets
-  local mode='all'
-  local kinds=${APP_ITEMS_KINDS}
-
-  for kind in $kinds; do
-
-    case "$mode" in
-    all)
-      for vault in $(item_ident_resources "$APP_IDENT_NAME" "$kind"); do
-        # _log INFO "Opening vault: $vault"
-        "lib_${kind}_unlock" "$vault" "$APP_IDENT_NAME"
-      done
-      ;;
-    user)
-      if item_assert_exists "$kind" "$APP_IDENT_VAULT_NAME" ; then
-        _log INFO "Unlocking user vault for: $APP_IDENT_NAME"
-        "lib_${kind}_unlock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
-      fi
-      ;;
-    esac
-  done
-}
-
-cli__sync() {
-  : ",Sync: pull and push"
+cb_sync (){
   local ident=$1
   cli__pull "$ident"
 
@@ -1906,10 +301,10 @@ cli__sync() {
   cli__push "$ident"
 
   _log INFO "Repo is now fully synced"
+
 }
 
-
-cli__pull() {
+cb_pull() {
   : ",Pull add commit and push"
   local ident=$1
 
@@ -1919,7 +314,7 @@ cli__pull() {
 
   # Update config
   git pull --ff
-  dir_lib_decrypt_meta
+  cb_config_decrypt
   items_pull_opened "$ident"
 
   if _is_git_diverged "main"; then
@@ -1934,7 +329,7 @@ cli__pull() {
 }
 
 
-cli__push() {
+cb_push() {
   : ",Pull add commit and push"
   local ident=$1
 
@@ -1942,7 +337,7 @@ cli__push() {
 
   _log INFO "Start push"
   items_push_opened "$ident"
-  dir_lib_encrypt_meta
+  cb_config_encrypt
 
   # Prepare push
   local ret=0
@@ -1963,7 +358,7 @@ cli__push() {
 }
 
 
-cli__fix() {
+cb_fix() {
   : ",Fix diverging remote branches"
 
   local ident=$1
@@ -2020,7 +415,7 @@ cli__fix() {
     local target_enc="${APP_CONFIG_FILE}.new.enc"
     git show  origin/main:$config_changed > "$target_enc"
 
-    dir_lib_decrypt_meta "$target_enc"
+    cb_config_decrypt "$target_enc"
     rm "$target_enc"
   fi
 
@@ -2062,6 +457,134 @@ cli__fix() {
 
 }
 
+
+# TOFIX
+# =================
+
+
+cb_lock (){
+  # set -x
+  load_ident "$1"
+
+
+  # Close secrets
+  local mode='all'
+  local kinds=${APP_ITEMS_KINDS}
+
+  for kind in $kinds; do
+
+    case "$mode" in
+    all)
+      for vault in $(item_ident_resources "$APP_IDENT_NAME" "$kind"); do
+        # _log INFO "Opening vault: $vault"
+        "lib_${kind}_lock" "$vault" "$APP_IDENT_NAME"
+      done
+      ;;
+    user)
+      if item_assert_exists "$kind" "$APP_IDENT_VAULT_NAME" ; then
+        _log INFO "Locking user vault for: $APP_IDENT_NAME"
+        "lib_${kind}_lock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
+      fi
+      ;;
+    esac
+  done
+
+
+  # Close config
+  cb_config_encrypt
+
+
+}
+
+
+cb_unlock(){
+  load_ident "$1"
+
+
+
+  _log DEBUG "Unlock global config with ident: $APP_IDENT_NAME"
+
+  # Decrypt metadata
+  cb_config_decrypt
+
+  # Open secrets
+  local mode='all'
+  local kinds=${APP_ITEMS_KINDS}
+
+  for kind in $kinds; do
+
+    case "$mode" in
+    all)
+      for vault in $(item_ident_resources "$APP_IDENT_NAME" "$kind"); do
+        # _log INFO "Opening vault: $vault"
+        "lib_${kind}_unlock" "$vault" "$APP_IDENT_NAME"
+      done
+      ;;
+    user)
+      if item_assert_exists "$kind" "$APP_IDENT_VAULT_NAME" ; then
+        _log INFO "Unlocking user vault for: $APP_IDENT_NAME"
+        "lib_${kind}_unlock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
+      fi
+      ;;
+    esac
+  done
+}
+
+
+
+# CLI General Commands
+# =================
+
+cli__conf() {
+  : "[ls|add|set|rm|get],Update donfiguration"
+  _dir_db "$@"
+}
+
+cli__lock() {
+  : ",Lock all vaults"
+  _log DEBUG "Lock all vaults and config"
+  if [[ -z "${1:-}" ]]; then
+    _die 1 "You must use an ident to unlock the vault"
+  fi
+  cb_lock "$@"
+}
+
+cli__unlock() {
+  : "ID,Unlock config"
+  [[ -n "${1:-}" ]] \
+    || _die 1 "You must use an ident to unlock the vault"
+  cb_unlock "$@"
+}
+
+
+cli__sync() {
+  : ",Sync: pull and push"
+  [[ -n "${1:-}" ]] \
+    || _die 1 "You must use an ident to unlock the vault"
+  cb_sync "$@"
+}
+
+cli__pull() {
+  : ",Pull add commit and push"
+  [[ -n "${1:-}" ]] \
+    || _die 1 "You must use an ident to unlock the vault"
+  cb_pull "$@"
+}
+
+cli__push() {
+  : ",Pull add commit and push"
+  [[ -n "${1:-}" ]] \
+    || _die 1 "You must use an ident to unlock the vault"
+  cb_push "$@"
+}
+
+cli__fix() {
+  : ",Fix diverging remote branches"
+  [[ -n "${1:-}" ]] \
+    || _die 1 "You must use an ident to unlock the vault"
+  cb_fix "$@"
+}
+
 # CLI encrypt/decrypt Commands
 # =================
 
@@ -2079,488 +602,8 @@ cli__encrypt() {
   _age_encrypt_file "$file" "$APP_USER_IDENTITY_FILE"
 }
 
-# CLI Ident Commands
-# =================
 
-# Display help message
-cli__id_usage() {
-  cat <<EOF
-${APP_NAME}: Manage ids (Subcommand example)
 
-usage: ${APP_NAME} id [OPTS] add NAME
-       ${APP_NAME} id [OPTS] rm NAME
-       ${APP_NAME} id [OPTS] ls NAME
-       ${APP_NAME} id help
-EOF
-}
-
-# Read CLI options, shows id level options
-cli__id_options() {
-  while [[ -n "${1:-}" ]]; do
-    # : "parse-opt-start"
-    case "$1" in
-    -h | --help | help)
-      : ",Show help"
-      clish_help cli__id
-      _die 0
-      ;;
-    -a | --all)
-      : ",Select all"
-      mode=all
-      shift
-      ;;
-    -m | --message)
-      : "MSG,Define message"
-      [[ -n "${2:-}" ]] || _die 1 "Missing message"
-      msg=$2
-      shift 2
-      ;;
-    -*)
-      _die 1 "Unknown option: $1"
-      ;;
-    *)
-      args=("$@")
-      shift $#
-      ;;
-    esac
-    # : "parse-opt-stop"
-  done
-}
-
-cli__id() {
-  : "COMMAND,Manage ids"
-
-  # Set default vars
-  local msg="Default message"
-  local mode="limited"
-  local args=
-
-  # Parse args
-  clish_parse_opts cli__id "$@"
-  set -- "${args[@]}"
-
-  _db_ensure_open
-
-  # Dispatch to sub commands
-  clish_dispatch cli__id__ "$@" || _die $?
-}
-
-# Basic simple level sub-commands
-# ---------------
-cli__id__new() {
-  : "NAME,Add new identity"
-  local ident_=${1:-}
-  local ident=''
-  local email=''
-
-  # Validate ident
-  while [[ -z "$ident" ]]; do
-    _input2 "${ident:-$ident_}" "Name of the new ident"
-    ident=$REPLY
-    if lib_id_exists "$ident"; then
-      _log WARN "This id already exists, please choose another one."
-      ident=
-    fi
-  done
-
-  # Ask for email
-  _input2 "$ident@$(hostname -f)" "Email"
-  email=$REPLY
-
-  # Create new ident
-  lib_id_new_ident__age "$ident"
-
-  # Set ident informations
-  _dir_db set "ident.$ident.login" "$ident_"
-  _dir_db set "ident.$ident.email" "$email"
-
-  # Create user vault
-  lib_vault_new "ident_${ident}" "$ident"
-
-}
-
-cli__id__ls() {
-  : "NAME,List idents"
-
-  lib_id_list
-
-}
-
-cli__id__keypair() {
-  : "NAME,Show identity key pair (require unlock password)"
-  load_ident "$1"
-  load_ident_password
-
-  echo "ident: $APP_IDENT_NAME"
-  echo "ident: $APP_IDENT_HASH"
-  echo "public: $APP_IDENT_PUB_KEY"
-  echo "private: $APP_IDENT_PRIV_KEY"
-}
-
-cli__id__rm() {
-  : "NAME,Remove identiry"
-  lib_id_rm_ident__age "$1"
-}
-
-cli__id__keyring() {
-  : "IDENT,Set ident in local keyring"
-  local ident=$1
-  load_ident "$1"
-  load_ident_password
-
-  # Store in keyring
-  printf "%s" "$APP_IDENT_PRIV_KEY" |
-    secret-tool store \
-      --label="SecretMgr Ident - $ident" \
-      application "$APP_NAME" \
-      "${APP_NAME}-ident" "$ident"
-
-  _log INFO "Identity has been added to keyring"
-}
-
-# CLI Vault Commands
-# =================
-
-# Display help message
-cli__vault_usage() {
-  cat <<EOF
-${APP_NAME}: Manage vaults (Subcommand example)
-
-usage: ${APP_NAME} vault [OPTS] add NAME
-       ${APP_NAME} vault [OPTS] rm NAME
-       ${APP_NAME} vault help
-EOF
-}
-
-# Read CLI options, shows vault level options
-cli__vault_options() {
-  while [[ -n "${1:-}" ]]; do
-    # : "parse-opt-start"
-    case "$1" in
-    -h | --help | help)
-      : ",Show help"
-      clish_help cli__vault
-      _die 0
-      ;;
-    -a | --all)
-      : ",Select all"
-      mode=all
-      shift
-      ;;
-    -m | --message)
-      : "MSG,Define message"
-      [[ -n "${2:-}" ]] || _die 1 "Missing message"
-      msg=$2
-      shift 2
-      ;;
-    -*)
-      _die 1 "Unknown option: $1"
-      ;;
-    *)
-      args=("$@")
-      shift $#
-      ;;
-    esac
-    # : "parse-opt-stop"
-  done
-}
-
-cli__vault() {
-  : "COMMAND,Manage vaults"
-
-  # Set default vars
-  local msg="Default message"
-  local mode="limited"
-  local args=
-
-  # Parse args
-  clish_parse_opts cli__vault "$@"
-  set -- "${args[@]}"
-
-  _db_ensure_open
-
-  # Dispatch to sub commands
-  clish_dispatch cli__vault__ "$@" || _die $?
-}
-
-# Basic simple level sub-commands
-# ---------------
-
-cli__vault__new() {
-  : "NAME [ID...],Create new vault"
-  lib_vault_new "$@"
-}
-
-cli__vault__ls() {
-  : ",List vaults"
-
-  if [[ "$#" -eq 0 ]]; then
-    item_list_names vault
-  else
-    item_ident_resources "$1" vault
-  fi
-}
-
-cli__vault__rm() {
-  : "NAME,Remove subcommand"
-  lib_vault_rm "$@"
-}
-
-cli__vault__close() {
-  : "NAME,Close vault"
-  lib_vault_lock "$@"
-}
-
-cli__vault__open() {
-  : "NAME [ID...],Open or create vault"
-  lib_vault_unlock "$@"
-}
-
-
-
-# CLI gitvault Commands
-# =================
-
-# Display help message
-cli__gitvault_usage() {
-  cat <<EOF
-${APP_NAME}: Manage gitvaults (Subcommand example)
-
-usage: ${APP_NAME} gitvault [OPTS] add NAME
-       ${APP_NAME} gitvault [OPTS] rm NAME
-       ${APP_NAME} gitvault help
-EOF
-}
-
-# Read CLI options, shows gitvault level options
-cli__gitvault_options() {
-  while [[ -n "${1:-}" ]]; do
-    # : "parse-opt-start"
-    case "$1" in
-    -h | --help | help)
-      : ",Show help"
-      clish_help cli__gitvault
-      _die 0
-      ;;
-    -a | --all)
-      : ",Select all"
-      mode=all
-      shift
-      ;;
-    -m | --message)
-      : "MSG,Define message"
-      [[ -n "${2:-}" ]] || _die 1 "Missing message"
-      msg=$2
-      shift 2
-      ;;
-    -*)
-      _die 1 "Unknown option: $1"
-      ;;
-    *)
-      args=("$@")
-      shift $#
-      ;;
-    esac
-    # : "parse-opt-stop"
-  done
-}
-
-cli__gitvault() {
-  : "COMMAND,Manage gitvaults"
-
-  # Set default vars
-  local msg="Default message"
-  local mode="limited"
-  local args=
-
-  # Parse args
-  clish_parse_opts cli__gitvault "$@"
-  set -- "${args[@]}"
-
-  _db_ensure_open
-
-  # Dispatch to sub commands
-  clish_dispatch cli__gitvault__ "$@" || _die $?
-}
-
-# Basic simple level sub-commands
-# ---------------
-
-cli__gitvault__new() {
-  : "NAME [ID...],Create new gitvault"
-  lib_gitvault_new "$@"
-}
-
-cli__gitvault__ls() {
-  : ",List gitvaults"
-
-  set -x
-
-  if [[ "$#" -eq 0 ]]; then
-    item_list_names gitvault
-  else
-    item_ident_resources "$1" gitvault
-  fi
-}
-
-cli__gitvault__rm() {
-  : "NAME,Remove subcommand"
-  lib_gitvault_rm "$@"
-}
-
-cli__gitvault__lock() {
-  : "NAME,Close gitvault"
-  lib_gitvault_lock "$@"
-}
-
-cli__gitvault__unlock() {
-  : "NAME [ID...],Open or mount gitvault"
-  lib_gitvault_unlock "$@"
-}
-
-
-cli__gitvault__push() {
-  : "NAME,Push gitvault in crypt"
-  lib_gitvault_push "$@"
-}
-
-cli__gitvault__pull() {
-  : "NAME [ID...],Pull gitvault from crypt"
-  lib_gitvault_pull "$@"
-}
-
-
-
-# # Nested command names
-# # ---------------
-# cli__secret__var ()
-# {
-#   : "," # Ignored from help
-#   clish_dispatch cli__secret__var__ "$@" \
-#     || _die $? "secret command failed with error: $?"
-# }
-
-# cli__secret__var__get()
-# {
-#   : "VAR,Get variable"
-#   echo "Value of var $1 is current date: $(date)"
-# }
-
-# cli__secret__var__set()
-# {
-#   : "VAR VALUE,Set variable value"
-#   local name=$1
-#   shift
-#   [ $# -gt 0 ] || return 42
-#   echo "Value of var '$name' set to: $@"
-# }
-
-# # CLI Sub Commands
-# # =================
-
-# # Display help message
-# cli__group_usage ()
-# {
-#   cat <<EOF
-# ${APP_NAME}: Manage groups (Subcommand example)
-
-# usage: ${APP_NAME} group [OPTS] add NAME
-#        ${APP_NAME} group [OPTS] rm NAME
-#        ${APP_NAME} group help
-# EOF
-# }
-
-# # Read CLI options, shows group level options
-# cli__group_options ()
-# {
-#   while [[ -n "${1:-}" ]]; do
-#     # : "parse-opt-start"
-#     case "$1" in
-#       -h|--help|help)
-#         : ",Show help"
-#         clish_help cli__group; _die 0
-#         ;;
-#       -a|--all)
-#         : ",Select all"
-#         mode=all
-#         shift
-#         ;;
-#       -m|--message)
-#         : "MSG,Define message"
-#         [[ -n "${2:-}" ]] || _die 1 "Missing message"
-#         msg=$2
-#         shift 2
-#         ;;
-#       -*)
-#         _die 1 "Unknown option: $1"
-#         ;;
-#       *)
-#         args=("$@")
-#         shift $#
-#       ;;
-#     esac
-#     # : "parse-opt-stop"
-#   done
-# }
-
-# cli__group ()
-# {
-#   : "COMMAND,Manage groups"
-
-#   # Set default vars
-#   local msg="Default message"
-#   local mode="limited"
-#   local args=
-
-#   # Parse args
-#   clish_parse_opts cli__group "$@"
-#   set -- "${args[@]}"
-
-#   # report to user
-#   _log INFO "Requested mod: $mode"
-#   _log INFO "Requested message: $msg"
-
-#   # Dispatch to sub commands
-#   clish_dispatch cli__group__ "$@" || _die $?
-# }
-
-# # Basic simple level sub-commands
-# # ---------------
-# cli__group__add()
-# {
-#   : "NAME [OPTS],Add subcommand"
-#   echo "Add: '$1' in '$mode' mode with message: '$msg'"
-# }
-
-# cli__group__rm()
-# {
-#   : "NAME,Remove subcommand"
-#   echo "Remove: $1"
-# }
-
-# # Nested command names
-# # ---------------
-# cli__group__var ()
-# {
-#   : "," # Ignored from help
-#   clish_dispatch cli__group__var__ "$@" \
-#     || _die $? "Group command failed with error: $?"
-# }
-
-# cli__group__var__get()
-# {
-#   : "VAR,Get variable"
-#   echo "Value of var $1 is current date: $(date)"
-# }
-
-# cli__group__var__set()
-# {
-#   : "VAR VALUE,Set variable value"
-#   local name=$1
-#   shift
-#   [ $# -gt 0 ] || return 42
-#   echo "Value of var '$name' set to: $@"
-# }
 
 # Core App
 # =================
