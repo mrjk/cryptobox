@@ -176,6 +176,14 @@ item_new() {
 
   local valid=false
 
+
+  # HOOK: ${kind}__new_pre
+  item_hook "$kind" new_pre \
+    || {
+      _log ERROR "Failed hook: new_pre for $kind"
+      return 1 
+    }
+
   # Sanity check
   item_assert_exists "$kind" "$vault_name" && {
     _log INFO "Vault '$vault_name' already exists."
@@ -214,10 +222,10 @@ item_new() {
   _dir_db set "$kind.$vault_name.store-hash" "$vault_hash"
 
   # set -x
-  # HOOK: ${kind}_new_final
-  item_hook "$kind" new_final \
+  # HOOK: ${kind}__new_post
+  item_hook "$kind" new_post \
     || {
-      _log ERROR "Failed hook: new_final for $kind"
+      _log ERROR "Failed hook: new_post for $kind"
       return 1 
     }
 
@@ -235,6 +243,14 @@ item_rm() {
   local vault_hash=$(_dir_db get "$kind.$vault_name.store-hash")
   local vault_enc="$APP_STORES_DIR/$vault_hash.age"
   local vault_dir="$APP_VAULTS_DIR/$vault_name"
+
+  # HOOK: ${kind}__rm_pre
+  item_hook "$kind" rm_pre \
+    || {
+      _log ERROR "Failed hook: rm_pre for $kind"
+      return 1 
+    }
+
 
   # Sanity checks
   [[ -n "$vault_hash" ]] || {
@@ -282,10 +298,10 @@ item_rm() {
     changed=true
   fi
 
-  # HOOK: ${kind}_rm_final
-  item_hook "$kind" rm_final \
+  # HOOK: ${kind}__rm_post
+  item_hook "$kind" rm_post \
     || {
-      _log ERROR "Failed hook: rm_final for $kind"
+      _log ERROR "Failed hook: rm_post for $kind"
       return 1 
     }
 
@@ -309,10 +325,10 @@ item_push() {
 
   # local vault_dir=${3:-}
 
-  # HOOK: ${kind}__push_pre
-  item_hook "$kind" push_pre \
+  # HOOK: ${kind}__push_init
+  item_hook "$kind" push_init \
     || {
-      _log ERROR "Failed hook: push_pre for $kind"
+      _log ERROR "Failed hook: push_init for $kind"
       return 1 
     }
 
@@ -348,12 +364,30 @@ item_push() {
     return 1
   }
 
-  # HOOK: ${kind}_push_post
-  item_hook "$kind" push_post \
+  # HOOK: ${kind}__push_pre
+  item_hook "$kind" push_pre \
     || {
-      _log ERROR "Failed hook: push_post for $kind"
+      _log ERROR "Failed hook: push_pre for $kind"
       return 1 
     }
+
+  # Ensure you have opened the last version
+  local prev_file_ts=$(_cache_db get "$kind.$vault_name.ts-open" )
+  local file_ts=$(stat -c %Y "$vault_enc")
+
+  # echo "TEST: $file_ts VS $prev_file_ts"
+
+  if [[ "${file_ts}" -ne "$prev_file_ts" ]]; then
+    _log ERROR "Vault changed since opened, please do pull first for $ident!"
+    return 1
+    # if $APP_FORCE; then
+    #   _log INFO "Force pulling"
+    # else
+    #   _log INFO "Already pulled, use '--force' to force"
+    #   return 0
+    # fi
+  fi
+
 
   # Gitvault specificties
   # if [[ "$kind" == "gitvault" ]]; then
@@ -380,25 +414,33 @@ item_push() {
   local ret=0
   local changed="without changes"
   if [[ "$old_checksum" == "$content_checksum" ]]; then
-    _log DEBUG "No changes in $kind, not reencrypting"
-  else
-    changed="with changes"
-    _log DEBUG "Changes detected in $kind, rencrypting data"
-    if ! $APP_DRY; then
-      _cache_db set "$kind.$vault_name.checksum" "$content_checksum"
-      ensure_dir "$APP_STORES_DIR"
-      # shellcheck disable=SC2086
-      tar -czf - -C "$vault_dir" . | age --encrypt --armor -output "$vault_enc" $age_recipient_args
-      ret=$?
+    if $APP_FORCE; then
+      _log INFO "Forcing push even if not necessary"
     else
-      _log DRY "Update encrypted file: $vault_enc"
+      _log DEBUG "No changes in $kind, not reencrypting, use --force"
+      return 0
     fi
   fi
 
-  # HOOK: ${kind}_push_final
-  item_hook "$kind" push_final \
+  # Do changes
+  changed="with changes"
+  _log DEBUG "Changes detected in $kind, rencrypting data"
+  if ! $APP_DRY; then
+    _cache_db set "$kind.$vault_name.checksum" "$content_checksum"
+    _cache_db set "$kind.$vault_name.ts_close" "$(stat -c "%Y" "$vault_enc")"
+    ensure_dir "$APP_STORES_DIR"
+    # shellcheck disable=SC2086
+    tar -czf - -C "$vault_dir" . | age --encrypt --armor -output "$vault_enc" $age_recipient_args
+    ret=$?
+  else
+    _log DRY "Update encrypted file: $vault_enc"
+  fi
+
+
+  # HOOK: ${kind}__push_post
+  item_hook "$kind" push_post \
     || {
-      _log ERROR "Failed hook: push_final for $kind"
+      _log ERROR "Failed hook: push_post for $kind"
       return 1 
     }
 
@@ -415,45 +457,58 @@ item_pull (){
   local vault_dir="$APP_VAULTS_DIR/$vault_name"
 
 
-  # HOOK: ${kind}_pull_pre
-  item_hook "$kind" pull_pre \
+  # HOOK: ${kind}_pull_init
+  item_hook "$kind" pull_init \
     || {
-      _log ERROR "Failed hook: pull_pre for $kind"
+      _log ERROR "Failed hook: pull_init for $kind"
       return 1 
     }
-
-
-  # Guess vault_dir
-  # case "$kind" in
-  #   vault) 
-  #     vault_dir="$APP_VAULTS_DIR/$vault_name"
-  #     ;;
-  #   gitvault) 
-  #     vault_dir="$APP_SPOOL_DIR/$vault_name"
-  #     ;;
-  # esac
 
   # Build vars
   local vault_hash=$(_dir_db get "$kind.$vault_name.store-hash")
   local vault_enc="$APP_STORES_DIR/$vault_hash.age"
   # local vault_dir="$APP_VAULTS_DIR/$vault_name"
 
-  # HOOK: ${kind}_pull_pre
+  # HOOK: ${kind}__pull_init
+  item_hook "$kind" pull_init \
+    || {
+      _log ERROR "Failed hook: pull_init for $kind"
+      return 1 
+    }
 
   # Sanity check
   if ! item_assert_exists "$kind" "$vault_name"; then
     _log ERROR "Unknown $kind: '$vault_name', available names are: $(item_list_names "$kind" | tr '\n' ',')"
     return 1
   fi
-  # TMP: [[ ! -d "$vault_dir" ]] || _die 0 "Already opened in $vault_dir"
-  [[ -f "$vault_enc" ]] || {
-    _log INFO "Encrypted file for $kind '$vault_name' does not exists: $vault_enc"
-    return 1
-  }
   [[ -n "$vault_hash" ]] || {
     _log ERROR "Could not get $kind store-hash"
     return 1
   }
+  [[ -f "$vault_enc" ]] || {
+    _log INFO "Encrypted file for $kind '$vault_name' does not exists: $vault_enc"
+    return 1
+  }
+  # TMP: [[ ! -d "$vault_dir" ]] || _die 0 "Already opened in $vault_dir"
+
+  # Check if update is required
+  # _cache_db set "$kind.$vault_name.checksum" "$content_checksum"
+  local prev_file_ts=$(_cache_db get "$kind.$vault_name.ts-open" )
+  local file_ts=$(stat -c %Y "$vault_enc")
+
+  # echo "TIMESATMP: $prev_file_ts VS new $file_ts"
+
+  if [[ -d "$vault_dir" ]]; then
+    if [[ "${file_ts}" -le "$prev_file_ts" ]]; then
+      if $APP_FORCE; then
+        _log INFO "Force pulling, but this is not needed"
+      else
+        _log INFO "Already pulled, use '--force' to force"
+        return 0
+      fi
+    fi
+  fi
+  _cache_db set "$kind.$vault_name.ts-open" "$file_ts"
 
   # Fetch default recipients
   if [[ -z "$ident" ]]; then
@@ -482,10 +537,10 @@ item_pull (){
 
   _log DEBUG "Opening '$vault_enc' with ident '$ident' in: $vault_dir"
   
-  # HOOK: ${kind}_pull_post
-  item_hook "$kind" pull_post \
+  # HOOK: ${kind}__pull_pre
+  item_hook "$kind" pull_pre \
     || {
-      _log ERROR "Failed hook: pull_post for $kind"
+      _log ERROR "Failed hook: pull_pre for $kind"
       return 1 
     }
 
@@ -529,10 +584,10 @@ item_pull (){
   #   fi
   # fi
 
-  # HOOK: ${kind}_pull_final
-  item_hook "$kind" pull_final \
+  # HOOK: ${kind}_pull_post
+  item_hook "$kind" pull_post \
     || {
-      _log ERROR "Failed hook: pull_final for $kind"
+      _log ERROR "Failed hook: pull_post for $kind"
       return 1 
     }
 
@@ -548,10 +603,10 @@ item_lock (){
 
   item_push gitvault "$vault_name"
 
-  # HOOK: ${kind}_pull_final
-  item_hook "$kind" lock_final \
+  # HOOK: ${kind}_lock_post
+  item_hook "$kind" lock_post \
     || {
-      _log ERROR "Failed hook: pull_final for $kind"
+      _log ERROR "Failed hook: lock_post for $kind"
       return 1 
     }
 
@@ -564,9 +619,9 @@ item_unlock (){
   item_pull gitvault "$vault_name" "$ident"
 
 
-  item_hook "$kind" unlock_final \
+  item_hook "$kind" unlock_post \
     || {
-      _log ERROR "Failed hook: pull_final for $kind"
+      _log ERROR "Failed hook: unlock_post for $kind"
       return 1 
     }
 }

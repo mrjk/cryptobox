@@ -198,7 +198,7 @@ $stop_delimiter"
 
 is_in_git() {
   local file=$1
-  if git status --porcelain "$file" | grep -q '^?? '; then
+  if git -C "${GIT_WORKTREE:-$PWD}" status --porcelain "$file" | grep -q '^?? '; then
     return 1
   fi
   return 0
@@ -206,7 +206,7 @@ is_in_git() {
 
 is_in_git_clean_stage() {
   local file=$1
-  local ret=$(git status --porcelain "$file")
+  local ret=$(git -C "${GIT_WORKTREE:-$PWD}" status --porcelain "$file")
   if [[ -z "$ret" ]]; then
     return 0
   elif grep -q '^A ' <<<"$ret"; then
@@ -222,7 +222,7 @@ ensure_file_in_git() {
     _log DEBUG "File is already in git"
   else
     _log DEBUG "Add encrypted file into git"
-    _exec git add "$file"
+    _exec git -C "${GIT_WORKTREE:-$PWD}" add "$file"
   fi
 }
 
@@ -230,7 +230,7 @@ ensure_file_in_git() {
 _is_git_diverged ()
 {
   local banch_name=${1:-main}
-  local count=$(git show-ref $banch_name | awk '{print $1}' | sort -u | wc -l)
+  local count=$(git -C "${GIT_WORKTREE:-$PWD}" show-ref $banch_name | awk '{print $1}' | sort -u | wc -l)
 
   if [[ "$count" -eq 1 ]]; then
     return 1
@@ -241,6 +241,16 @@ _is_git_diverged ()
   fi
 }
 
+# Return true if a git branch exists
+git_branch_exists () {
+  git -C "${GIT_WORKTREE:-$PWD}" rev-parse --verify "$1" 2>/dev/null
+  return $?
+}
+
+# Return the current branch name
+git_curent_branch (){
+  git -C "${GIT_WORKTREE:-$PWD}" rev-parse --abbrev-ref HEAD
+}
 
 # Age commands
 # =====================

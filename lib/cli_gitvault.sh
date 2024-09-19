@@ -6,12 +6,12 @@ APP_ITEMS_KINDS="${APP_ITEMS_KINDS} gitvault"
 # gitvault Hooks
 # =================
 
-lib_gitvault_hook__push_pre ()
+lib_gitvault_hook__push_init ()
 {
     vault_dir="$APP_SPOOL_DIR/$vault_name"
 }
 
-lib_gitvault_hook__push_post ()
+lib_gitvault_hook__push_pre ()
 {
     local target_dir="$APP_VAULTS_DIR/$vault_name"
     local repo_dir="../.spool/$vault_name"
@@ -30,20 +30,20 @@ lib_gitvault_hook__push_post ()
     fi
 }
 
-lib_gitvault_hook__lock_final ()
+lib_gitvault_hook__lock_post ()
 {
   _exec rm -rf "$APP_SPOOL_DIR/$vault_name"
   _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
 }
 
 
-lib_gitvault_hook__pull_pre ()
+lib_gitvault_hook__pull_init ()
 {
     vault_dir="$APP_SPOOL_DIR/$vault_name"
 }
 
 
-lib_gitvault_hook__pull_final ()
+lib_gitvault_hook__pull_post ()
 {
     local target_dir="$APP_VAULTS_DIR/$vault_name"
     local repo_dir="$APP_SPOOL_DIR/$vault_name"
@@ -78,7 +78,7 @@ lib_gitvault_hook__rm_final ()
 
 }
 
-lib_gitvault_hook__new_final ()
+lib_gitvault_hook__new_post ()
 {
   # Create git spool
   local repo_spool="$APP_SPOOL_DIR/$vault_name"

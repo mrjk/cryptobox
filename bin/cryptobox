@@ -92,6 +92,8 @@ cb_init_app() {
 
   # Go to the root project
   cd "$PROJECT_ROOT"
+  export APP_SEED="0000"
+  export APP_INSTANCE="$(hostname -f)-$(hash_sum "$PROJECT_ROOT" | head -c 8)"
   export APP_DATA_DIR="${PROJECT_ROOT}"
 
   export APP_IDENT_DIR="${APP_DATA_DIR}/identities"
@@ -206,6 +208,7 @@ cb_config_encrypt() {
   # Quit if nothing to do
   if [[ "$commited_content_hash" == "$curr_hash" ]] ; then
     _log INFO "No need to reencrypt config"
+    # set -x
     return 0
   fi
 
@@ -342,6 +345,8 @@ cb_push() {
     || ! is_in_git_clean_stage "identities" \
     ; then
 
+    _log INFO "Check for local changes"
+    git status -sb
     _exec git add stores identities
 
     _exec git commit --untracked-files=no -m 'update vault' stores identities
