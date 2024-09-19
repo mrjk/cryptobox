@@ -56,6 +56,10 @@ APP_CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/$APP_REAL_NAME
 
 SCRIPT_LIB="${SCRIPT_REAL_DIR}/../lib"
 
+APP_CONFIG_KEY_PROJECT=cryptobox.project
+
+
+
 # Load internal libs
 # source "$SCRIPT_LIB/utils.sh"
 # source "$SCRIPT_LIB/idents.sh"
@@ -68,7 +72,7 @@ source "$SCRIPT_LIB/lib_conf.sh"
 source "$SCRIPT_LIB/lib_resources.sh"
 
 source "$SCRIPT_LIB/cli_idents.sh"
-source "$SCRIPT_LIB/cli_gitvault.sh"
+# source "$SCRIPT_LIB/cli_gitvault.sh"
 source "$SCRIPT_LIB/cli_vault.sh"
 
 
@@ -78,6 +82,54 @@ source "$SCRIPT_LIB/cli_vault.sh"
 # Init loaders
 # =================
 
+find_top_project_path() {
+    local current_dir="$1"
+
+    _log TRACE "Scan path: $current_dir"
+
+    # Check if we're at the root directory
+    if [ "$current_dir" = "/" ]; then
+        _log TRACE "Reached root directory without finding the top project path." >&2
+        return 1
+    fi
+
+    # Check if we're in a git repository
+    if ! git -C "$current_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        _log TRACE "Not inside a git repository." >&2
+        return 1
+    fi
+
+    # Get the root of the current git repository
+    local git_root
+    git_root=$(git -C "$current_dir" rev-parse --show-toplevel)
+
+    # Check if we're at the root of the git repository
+    if [ "$current_dir" != "$git_root" ]; then
+        _log TRACE "Go to git root directory: $git_root" >&2
+        find_top_project_path "$git_root"
+        return $?
+    fi
+
+    # Query git config for IS_ROOT
+    local is_root
+    is_root=$(git -C "$current_dir" config --get "$APP_CONFIG_KEY_PROJECT" || echo "false")
+
+    if [ "$is_root" = "true" ]; then
+        _log DEBUG "Found root project: $current_dir" >&2
+        echo "$current_dir"
+        return 0
+    elif [ -z "$is_root" ] || [ "$is_root" = "false" ]; then
+        local target="$(dirname "$current_dir")"
+        _log TRACE "Not root project, try parent: $target" >&2
+
+        find_top_project_path "$target"
+        return $?
+    else
+        _log TRACE "Error: Invalid value for $APP_CONFIG_KEY_PROJECT: $is_root" >&2
+        return 1
+    fi
+}
+
 # Init loaders
 # =================
 
@@ -85,10 +137,15 @@ source "$SCRIPT_LIB/cli_vault.sh"
 # Init app
 cb_init_app() {
 
-  # export PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  # Determine cryptobox project path
   export PROJECT_ROOT=$PWD
-  [[ -d "$PROJECT_ROOT" ]] ||
-    _die 1 "Can't find project root. Are you in a git repo ?"
+  PROJECT_ROOT=$(find_top_project_path "$PROJECT_ROOT") \
+     || {
+        _log HINT "Cryptobox project can't be found in parent directory."
+        _log HINT "Are you in a cryptobox repo?"
+        _log HINT "To create a new cryptobox repo here, run: $APP_NAME init ."
+        _die 1 "Could not find cryptobox project"
+     }
 
   # Go to the root project
   cd "$PROJECT_ROOT"
@@ -179,6 +236,40 @@ cb_init_ident_pass() {
 
 # Metadata config
 # =================
+
+# Init a new cryptobox repo
+cb_init() {
+  local target="${1:-.}"
+
+  # Ensure target dir exsists
+  [[ -d "$target" ]] \
+    || _exec mkdir -p "$target" >/dev/null \
+    || _die $? "Failed to created directory: $target"
+
+  # Ensure targfet dir is git repo
+  # is_dir_git_repo "$target" \
+  [[ -d "$target/.git" ]] \
+    || {
+      _log INFO "Create new empty git repository in: $target"
+      _exec git init "$target" >&/dev/null || \
+        _die 1 "Failed to create git repo in: $target"
+    }
+
+  # Ensure git is correctly setup
+  local current_val=$(git -C "$target" config get  --local "$APP_CONFIG_KEY_PROJECT")
+
+  # Ensure DB is ready
+  _db_ensure_created "$target/cryptobox.ini" || \
+    _die $? "Failed to create db in!"
+
+  if [[ "$current_val" == "true" ]] ; then
+      _log INFO "Already configured with cryptobox: $target"
+  else
+    _exec git -C "$target" config set  --local   "$APP_CONFIG_KEY_PROJECT" true
+    _log INFO "New cryptobox repository created in: $target"
+  fi
+}
+
 
 cb_config_encrypt() {
   local dest_hash=$APP_CONFIG_FILE_HASH
@@ -541,6 +632,16 @@ cb_unlock(){
 # CLI General Commands
 # =================
 
+
+cli__init() {
+  : "[PATH],Init new cryptobox repository"
+  local target="${1:-.}"
+
+  cb_init "$target"
+}
+
+
+
 cli__conf() {
   : "[ls|add|set|rm|get],Update donfiguration"
   _dir_db "$@"
@@ -608,6 +709,14 @@ cli__encrypt() {
   _age_encrypt_file "$file" "$APP_USER_IDENTITY_FILE"
 }
 
+cli__info() {
+  : ",Show informations"
+  local ident=${1:-}
+  cb_init_ident "$ident" || true
+
+  env | sort | grep APP_
+
+}
 
 
 
@@ -713,17 +822,23 @@ cli() {
   # Init app
   cli_init
 
-  cb_init_app
 
   # Route commands before requirements
   local cmd=${1:-help}
   shift 1 || true
   case "$cmd" in
-  -h | --help | help | h)
-    clish_help cli
-    _die 0
+    init)
+      cb_init "$@"
+      _die 0
+    ;;
+    -h | --help | help | h)
+      clish_help cli
+      _die 0
     ;;
   esac
+
+  cb_init_app
+
 
   # Check requirements
   cli_require

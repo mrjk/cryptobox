@@ -357,7 +357,8 @@ cli__id__new() {
   _dir_db set "ident.$ident.email" "$email"
 
   # Create user vault
-  lib_vault_new "ident_${ident}" "$ident"
+  # lib_vault_new "ident_${ident}" "$ident"
+  item_new vault "ident_${ident}" "$ident"
 
 }
 

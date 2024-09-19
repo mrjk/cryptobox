@@ -196,6 +196,15 @@ $stop_delimiter"
 # Git commands
 # =====================
 
+
+# Check if directory is a git repo
+is_dir_git_repo() {
+  local dir=${1:-${GIT_WORKTREE:-$PWD}}
+  [[ -d $dir"" ]] || return 1
+  git -C "$dir" rev-parse --is-inside-work-tree >&/dev/null
+}
+
+# Very badly named function!
 is_in_git() {
   local file=$1
   if git -C "${GIT_WORKTREE:-$PWD}" status --porcelain "$file" | grep -q '^?? '; then

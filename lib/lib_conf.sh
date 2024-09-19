@@ -25,6 +25,26 @@ _db_ensure_open() {
   fi
 }
 
+# Ensure workspace is unlocked
+_db_ensure_created() {
+  local file=${1:-$APP_CONFIG_FILE}
+
+  if [[ -f "$file" ]]; then
+    _log TRACE "Config file already exists : $file"
+    return
+  fi
+
+  if [[ -f "${APP_CONFIG_FILE_ENC:-NONE}" ]]; then
+    _log TRACE "Config file already exists and it's encrypted: $APP_CONFIG_FILE_ENC"
+    return
+  fi
+
+  _log INFO "Create a new config file: $file"
+  _exec git-db init "$file" 2>/dev/null
+  
+}
+
+
 _cache_db() {
   local target=$APP_CACHE_FILE
 

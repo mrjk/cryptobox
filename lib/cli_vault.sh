@@ -209,8 +209,6 @@ lib_vault_hook__push_pre ()
       fi
 
 
-
-
       unset GIT_WORKTREE
 
   fi
@@ -229,7 +227,8 @@ lib_vault_hook__new_post () {
 
   # Create vault
   local vault_dest="$APP_VAULTS_DIR/$vault_name"
-  ensure_dir "$vault_dest"
+  # ensure_dir "$vault_dest"
+  git init "$vault_dest"
   echo "Hello world" >>"$vault_dest/README.md"
 
   _log INFO "New vault created in: $vault_dest"
