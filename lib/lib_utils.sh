@@ -204,6 +204,15 @@ is_dir_git_repo() {
   git -C "$dir" rev-parse --is-inside-work-tree >&/dev/null
 }
 
+
+# Check if repo has any commits
+has_commits () {
+  local dir=${1:-${GIT_WORKTREE:-$PWD}}
+
+  git -C "$dir" rev-parse HEAD 1>/dev/null 2>&1 || return 1
+}
+
+
 # Very badly named function!
 is_in_git() {
   local file=$1
@@ -280,9 +289,9 @@ is_age_encrypted_file() {
   return $ret
 }
 
+
 # Passwordless decrypt
 _age_decrypt_with_ident() {
-  cb_init_ident_pass || return $?
 
   [[ -n "$APP_IDENT_PRIV_KEY" ]] || _die 1 "Missing ident private key"
   _log DEBUG "Decrypt with age and internal priv key"
@@ -317,7 +326,7 @@ _age_decrypt_file() {
 
   ident=${ident:-$APP_USER_IDENTITY_CRYPT_TARGET}
 
-  _exec _age_decrypt_with_ident -o "$dest" "$file"
+  _age_decrypt_with_ident -o "$dest" "$file"
 }
 
 _age_public_key_from_private_key() {

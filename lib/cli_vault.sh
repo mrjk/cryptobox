@@ -10,15 +10,15 @@ APP_ITEMS_KINDS="${APP_ITEMS_KINDS} vault"
 # {
 #     # # Delete existing content, so deleted files are not re-propagated
 #     # if $APP_FORCE; then
-#     #   _log WARN "Local changes in '$vault_dir' will be lost after update"
-#     #   rm -rf "$vault_dir"
+#     #   _log WARN "Local changes in '$_VAULT_DIR' will be lost after update"
+#     #   rm -rf "$_VAULT_DIR"
 #     # else
-#     #   _log DEBUG "Local changes in '$vault_dir' are kept, deleted files may reappear. Use '-f' to delete first."
+#     #   _log DEBUG "Local changes in '$_VAULT_DIR' are kept, deleted files may reappear. Use '-f' to delete first."
 #     # fi
 
 #     # Check if git directory exists
-#     if [[ -d "$vault_dir/.git" ]]; then
-#       export GIT_WORKTREE=$vault_dir
+#     if $_VAULT_IS_GIT ; then
+#       export GIT_WORKTREE=$_VAULT_DIR
 #       local ref_br=main
 #       local local_br=$(git_curent_branch)
 #       local br_name="work-$APP_INSTANCE"
@@ -28,24 +28,24 @@ APP_ITEMS_KINDS="${APP_ITEMS_KINDS} vault"
 
 #       if [[ "$local_br" != "$br_name" ]]; then
 #         if git_branch_exists "$br_name"; then
-#           git -C "$vault_dir" checkout "$br_name"
+#           git -C "$_VAULT_DIR" checkout "$br_name"
 #         else
-#           git -C "$vault_dir" checkout -b "$br_name" "$local_br"
+#           git -C "$_VAULT_DIR" checkout -b "$br_name" "$local_br"
 #         fi
 #       else
 #         _log INFO "Already on the correct branch"
 #       fi
 
 #       # Do the merge
-#       if git -C "$vault_dir" rebase "$ref_br"; then
+#       if git -C "$_VAULT_DIR" rebase "$ref_br"; then
 #         _log INFO "Vault rebased from $ref_br"
 #       else 
-#         git -C "$vault_dir" rebase --abort
+#         git -C "$_VAULT_DIR" rebase --abort
 
-#         if git -C "$vault_dir" merge "$ref_br" -Xtheirs; then
+#         if git -C "$_VAULT_DIR" merge "$ref_br" -Xtheirs; then
 #           _log INFO "Vault merged from $ref_br"
 #         else
-#           git -C "$vault_dir" merge --abort
+#           git -C "$_VAULT_DIR" merge --abort
 #           _log WARN "Vault diverged from $ref_br, please fix yourself!"
 #         fi
 #       fi
@@ -58,175 +58,178 @@ APP_ITEMS_KINDS="${APP_ITEMS_KINDS} vault"
 # }
 
 
+
+
+
+lib_vault_hook__load ()
+{
+  export _VAULT_IS_GIT=false
+
+  if [[ -d "$_VAULT_DIR/.git" ]] && has_commits "$_VAULT_DIR"; then
+    _VAULT_IS_GIT=true
+  fi
+
+}
+
+
+
 lib_vault_hook__pull_pre ()
 {
+  # Check if git directory exists
+  if $_VAULT_IS_GIT ; then
 
+    export GIT_WORKTREE=$_VAULT_DIR
+    local ref_br=main
+    local local_br=$(git_curent_branch)
+    local br_name="work-$APP_INSTANCE"
+    export RESTORE_STASH=false
+    export OLD_BRANCH=$local_br
 
-    # Check if git directory exists
-    if [[ -d "$vault_dir/.git" ]]; then
-      set -x
+    _log INFO "Local branch name: $br_name"
 
-      export GIT_WORKTREE=$vault_dir
-      local ref_br=main
-      local local_br=$(git_curent_branch)
-      local br_name="work-$APP_INSTANCE"
-      export RESTORE_STASH=false
-      export OLD_BRANCH=$local_br
-
-      _log INFO "Local branch name: $br_name"
-
-      # Check if workspace is clean
-      if [[ -n "$(git -C "$vault_dir" status -s)" ]]; then
-        _log WARN "Stashing untracked changes in $vault_name"
-        git -C "$vault_dir" stash
-        RESTORE_STASH=true
-      fi
-
-
-
-      # set -x
-      if git_branch_exists "$br_name"; then
-        _log WARN "Delete existing branch: $br_name"
-        _exec git -C "$vault_dir" branch -D  "$br_name"
-      fi
-
-      # Ensure we are on main
-      _exec git -C "$vault_dir" checkout "$ref_br"
-
-      # Create local copy of branch
-      _exec git -C "$vault_dir" branch "$br_name" "$local_br"
-
-      unset GIT_WORKTREE
-
+    # Check if workspace is clean, or stash it
+    if [[ -n "$(git -C "$_VAULT_DIR" status -s)" ]]; then
+      _log WARN "Stashing untracked changes in $_VAULT_NAME"
+      git -C "$_VAULT_DIR" stash
+      RESTORE_STASH=true
     fi
-    set +x
+
+    # Delete local branch if it exists
+    if git_branch_exists "$br_name"; then
+      _log ERROR "Unmerged changes in $_VAULT_NAME from branch, please delete: $br_name"
+      return 1
+      # _log DEBUG "Delete existing reserved branch: $br_name"
+      # _exec git -C "$_VAULT_DIR" branch -D "$br_name"
+    fi
+
+    # Ensure we are on main
+    if [[ "$local_br" != "$ref_br" ]]; then
+      _exec git -C "$_VAULT_DIR" checkout "$ref_br"
+    fi
+
+    # Create local copy of main branch
+    _exec git -C "$_VAULT_DIR" branch "$br_name" "$local_br"
+
+    unset GIT_WORKTREE
+  fi
+  # set +x
+
 }
 
 
 lib_vault_hook__pull_post ()
 {
-    if [[ -d "$vault_dir/.git" ]]; then
-      set -x
-      export GIT_WORKTREE=$vault_dir
-      local ref_br=main
-      local curr_br=$(git_curent_branch)
-      local br_name="work-$APP_INSTANCE"
-      _log INFO "Local branch name: $br_name"
+  if $_VAULT_IS_GIT ; then
+    set -x
+    export GIT_WORKTREE=$_VAULT_DIR
+    local ref_br=main
+    local curr_br=$(git_curent_branch)
+    local br_name="work-$APP_INSTANCE"
 
-    # set -x
-
-
-      # git -C "$vault_dir" pull
-
-      # # Remove existing files
-      # while read -r file ; do
-      #   [[ -n "$file" ]] || continue
-      #   local target="$vault_dir/$file"
-      #   _log WARN "Remove file: $target"
-      #   _exec rm "$target"
-      # done <<<$(git -C "$vault_dir" ls-tree -r --name-only "$br_name")
-      # # echo DOOOOOOOOOOOOOOONE
-
-      _log INFO "Trying to rebased from $ref_br ..."
-
-
-      # Checkout correct branch
-      if [[ "$curr_br" != "$ref_br" ]]; then
-        git -C "$vault_dir" checkout "$ref_br"
-      fi
-
-      # Try to rebase first
-      if _exec git -C "$vault_dir" rebase -Xtheirs "$ref_br"; then
-        _log INFO "Vault rebased from $ref_br"
-      else
-        # Cleanup
-        _exec git -C "$vault_dir" rebase --abort
-
-        _log INFO "Trying to merge from $ref_br ... (ours)"
-        # Try then to merge changes
-        if _exec git -C "$vault_dir" merge -m "Merge from $br_name" "$br_name" -Xtheirs; then
-          _log INFO "Vault merged from $br_name"
-          _exec git -C "$vault_dir" branch -D  "$br_name"
-          _exec git -C "$vault_dir" checkout .
-        else
-          _exec git -C "$vault_dir" merge --abort
-          _log WARN "Vault diverged from $br_name, please fix yourself!"
-        fi
-      fi
-
-      # Go back to last branch
-      if [[ "$ref_br" != "$OLD_BRANCH" ]]; then
-        git -C "$vault_dir" checkout "$OLD_BRANCH"
-      fi
-
-      # Retore unstaged changes
-      if $RESTORE_STASH ; then
-        _log WARN "Restore stash"
-        git  -C "$vault_dir" stash pop
-      fi
-
-
-      set +x
-      # if [[ "$local_br" != "$br_name" ]]; then
-      #   if git_branch_exists "$br_name"; then
-      #     git -C "$vault_dir" checkout "$br_name"
-      #   else
-      #     git -C "$vault_dir" checkout -b "$br_name" "$local_br"
-      #   fi
-      # else
-      #   _log INFO "Already on the correct branch"
-      # fi
-
-      unset GIT_WORKTREE
-
-
+    _log DEBUG "Trying to rebase $ref_br from $br_name ..."
+    # Checkout correct main branch
+    if [[ "$curr_br" != "$ref_br" ]]; then
+      git -C "$_VAULT_DIR" checkout "$ref_br"
     fi
-  set +x
+
+    # Try to rebase first from local copy
+    if _exec git -C "$_VAULT_DIR" rebase -Xtheirs "$ref_br"; then
+      _log INFO "Vault rebased from $ref_br"
+    else
+      # Failed to rebase, so cleanup
+      _exec git -C "$_VAULT_DIR" rebase --abort
+
+      _log DEBUG "Trying to merge from $ref_br ... (ours)"
+      # Try then to merge changes
+      if _exec git -C "$_VAULT_DIR" merge -m "Merge from $br_name" "$br_name" -Xtheirs; then
+        _log INFO "Vault merged from $br_name"
+        _exec git -C "$_VAULT_DIR" branch -D  "$br_name"
+        _exec git -C "$_VAULT_DIR" checkout .
+      else
+        _exec git -C "$_VAULT_DIR" merge --abort
+        _log WARN "Vault diverged from $br_name, please fix yourself!"
+      fi
+    fi
+
+    # Go back to last branch
+    if [[ "$ref_br" != "$OLD_BRANCH" ]]; then
+      git -C "$_VAULT_DIR" checkout "$OLD_BRANCH" || { 
+        _log ERROR "Failed to go back on previous branch: $OLD_BRANCH"
+        RESTORE_STASH=false
+      }
+    fi
+
+    # Retore unstaged changes
+    if $RESTORE_STASH ; then
+      _log DEBUG "Restore stash"
+      git  -C "$_VAULT_DIR" stash pop
+    fi
+
+    unset GIT_WORKTREE
+  fi
+
 }
 
 
-
-# lib_vault_hook__pull_post ()
-# {
-
-# }
 
 lib_vault_hook__push_pre ()
 {
+  if $_VAULT_IS_GIT ; then
+    export GIT_WORKTREE=$_VAULT_DIR
+    local ref_br=main
+    local local_br=$(git_curent_branch)
+    local br_name="work-$APP_INSTANCE"
+    export RESTORE_STASH=false
+    export OLD_BRANCH=$local_br
 
-  if [[ -d "$vault_dir/.git" ]]; then
-      export GIT_WORKTREE=$vault_dir
-      local ref_br=main
-      local curr_br=$(git_curent_branch)
-      local br_name="work-$APP_INSTANCE"
-      _log INFO "Local branch name: $br_name"
+    _log INFO "Local branch name: $br_name"
 
-      # git merge main -Xours
-      # set -x
-      if [[ "$curr_br" != "$ref_br" ]]; then
-        _log INFO "Checking out main"
-        _exec git -C "$vault_dir" checkout "$ref_br"
-      fi
+    # Check if workspace is clean, or stash it
+    if [[ -n "$(git -C "$_VAULT_DIR" status -s)" ]]; then
+      _log WARN "Stashing untracked changes in $_VAULT_NAME"
+      git -C "$_VAULT_DIR" stash
+      RESTORE_STASH=true
+    fi
 
-
-      unset GIT_WORKTREE
-
+    if [[ "$local_br" != "$ref_br" ]]; then
+      _log INFO "Checking out main before encrypting $_VAULT_DIR"
+      _exec git -C "$_VAULT_DIR" checkout "$ref_br"
+    fi
+    unset GIT_WORKTREE
   fi
-  set +x
 
 }
 
+lib_vault_hook__push_post ()
+{
+  if $_VAULT_IS_GIT ; then
+
+    # Go back to last branch
+    if [[ "$ref_br" != "$OLD_BRANCH" ]]; then
+      git -C "$_VAULT_DIR" checkout "$OLD_BRANCH" || { 
+        _log ERROR "Failed to go back on previous branch: $OLD_BRANCH"
+        RESTORE_STASH=false
+      }
+    fi
+
+    # Retore unstaged changes
+    if $RESTORE_STASH ; then
+      _log DEBUG "Restore stash"
+      git  -C "$_VAULT_DIR" stash pop
+    fi
+  fi
+}
 
 lib_vault_hook__lock_post () {
 
-  _exec rm -rf "$APP_VAULTS_DIR/$vault_name"
+  _exec rm -rf "$APP_VAULTS_DIR/$_VAULT_NAME"
 
 }
 
 lib_vault_hook__new_post () {
 
   # Create vault
-  local vault_dest="$APP_VAULTS_DIR/$vault_name"
+  local vault_dest="$APP_VAULTS_DIR/$_VAULT_NAME"
   # ensure_dir "$vault_dest"
   git init "$vault_dest"
   echo "Hello world" >>"$vault_dest/README.md"
@@ -305,12 +308,12 @@ cli__vault() {
 
 cli__vault__new() {
   : "NAME [ID...],Create new vault"
-  local vault_name=$1
+  local _VAULT_NAME=$1
   shift 1
   local idents=${@:-}
 
   # Create new item
-  item_new vault "$vault_name" "$idents"
+  item_new vault "$_VAULT_NAME" "$idents"
 }
 
 cli__vault__ls() {
@@ -328,18 +331,33 @@ cli__vault__rm() {
   item_rm vault "$@"
 }
 
+cli__vault__push() {
+  : "NAME,Push vault"
+  local _VAULT_NAME=$1
+  item_push vault "$_VAULT_NAME"
+}
+
+cli__vault__pull() {
+  : "NAME [ID...],Open or create vault"
+  local _VAULT_NAME=$1
+  shift 1
+  local ident=${@:-}
+
+  item_pull vault "$_VAULT_NAME" "$ident"
+}
+
+
 cli__vault__lock() {
   : "NAME,Close vault"
-  local vault_name=$1
-  item_push vault "$vault_name"
+  local _VAULT_NAME=$1
+  item_lock vault "$_VAULT_NAME"
 }
 
 cli__vault__unlock() {
   : "NAME [ID...],Open or create vault"
-  local vault_name=$1
+  local _VAULT_NAME=$1
   shift 1
   local ident=${@:-}
 
-  item_pull vault "$vault_name" "$ident"
+  item_unlock vault "$_VAULT_NAME" "$ident"
 }
-

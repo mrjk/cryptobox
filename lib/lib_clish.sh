@@ -2,31 +2,44 @@
 # CLI libraries
 # =================
 
+# Validate log level pass aginst limit
+_log_validate_level ()
+{
+  local level=$1
+  local limit_level=${2:-${APP_LOG_SCALE%%:*}}
+  
+  if [[ ! ":${APP_LOG_SCALE#*$limit_level:}:$limit_level:" =~ :"$level": ]]; then
+    if [[ ! ":${APP_LOG_SCALE}" =~ :"$level": ]]; then
+      >&2 printf "%s\n" "  BUG: Unknown log level: $level"
+    fi
+    return 1
+  fi
+}
+
 # Logging support, with levels
 _log() {
-  local lvl="${1:-DEBUG}"
+  # old_setting=${-//[^x]/}; set +x
+
+  local level="${1:-DEBUG}"
   shift 1 || true
 
   # Check log level filter
-  if [[ ! ":${APP_LOG_SCALE#*$APP_LOG_LEVEL:}:$APP_LOG_LEVEL:" =~ :"$lvl": ]]; then
-    if [[ ! ":${APP_LOG_SCALE}" =~ :"$lvl": ]]; then
-      >&2 printf "%s\n" "  BUG: Unknown log level: $lvl"
-    else
-      return 0
-    fi
-  fi
+  _log_validate_level "$level" "${APP_LOG_LEVEL:-}" || return 0
 
   local msg=${*}
   if [[ "$msg" == '-' ]]; then
     msg="$(cat -)"
   fi
   while read -r -u 3 line; do
-    >&2 printf "%5s: %s\\n" "$lvl" "${line:- }"
+    >&2 printf "%6s: %s\\n" "$level" "${line:- }"
   done 3<<<"$msg"
+
+  if [[ -n "${old_setting-}" ]]; then set -x; else set +x; fi
 }
 
 # Terminate all with error message and rc code
 _die() {
+  set +x
   local rc=${1:-1}
   shift 1 || true
   local msg="${*:-}"
@@ -34,9 +47,9 @@ _die() {
   [[ "$rc" -eq 0 ]] || prefix=DIE
   if [[ -z "$msg" ]]; then
     [ "$rc" -ne 0 ] || exit 0
-    _log "$prefix" "Program terminated with error: $rc"
+    _log "$prefix" "Program terminated with error: $rc ($$)"
   else
-    _log "$prefix" "$msg"
+    _log "$prefix" "$msg ($$)"
   fi
 
   # Remove EXIT trap and exit nicely

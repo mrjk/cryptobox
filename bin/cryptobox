@@ -36,7 +36,7 @@ APP_DATE="2024-08-01"
 APP_VERSION=0.0.1
 
 # App configuration
-APP_LOG_SCALE="TRACE:DEBUG:RUN:INFO:DRY:HINT:NOTICE:CMD:USER:WARN:ERR:ERROR:CRIT:TODO:DIE:QUIT:PROMPT"
+APP_LOG_SCALE="TRACE:TRACE3:TRACE2:TRACE1:DEBUG:DEBUG3:DEBUG2:DEBUG1:RUN:INFO:DRY:NOTICE:HINT:CMD:USER:WARN:ERR:ERROR:CRIT:TODO:DIE:QUIT:PROMPT"
 #APP_DEPENDENCIES="column tree"
 # set -x
 
@@ -57,8 +57,8 @@ APP_CONFIG_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/$APP_REAL_NAME
 SCRIPT_LIB="${SCRIPT_REAL_DIR}/../lib"
 
 APP_CONFIG_KEY_PROJECT=cryptobox.project
-
-
+APP_SUBPATH_CONTEXT=true
+APP_ENABLE_KEYRING=true
 
 # Load internal libs
 # source "$SCRIPT_LIB/utils.sh"
@@ -146,6 +146,12 @@ cb_init_app() {
         _log HINT "To create a new cryptobox repo here, run: $APP_NAME init ."
         _die 1 "Could not find cryptobox project"
      }
+  _log DEBUG "App project dir: $PROJECT_ROOT ($$)"
+
+  # Calculate subpath relative to root dir
+  export APP_SUBPATH=''
+  [[ "$PWD" != "$PROJECT_ROOT"* ]] \
+    || APP_SUBPATH=${PWD#$PROJECT_ROOT}
 
   # Go to the root project
   cd "$PROJECT_ROOT"
@@ -207,31 +213,45 @@ cb_init_ident_pass() {
   local private_key=
 
   # Fetch secret from keyring
-  private_key=$(keyring_get_best_secret "${APP_IDENT_NAME}")
+  if $APP_ENABLE_KEYRING; then
+    private_key=$(keyring_get_best_secret "${APP_IDENT_NAME}")
+    if [[ -n "$private_key" ]]; then
+      _log INFO "Found '$APP_IDENT_NAME' main password in local keyring"
+    else
+      _log HINT "You can save $APP_IDENT_NAME password in local keyring with command: cryptobox id keyring $APP_IDENT_NAME"
+      _log DEBUG1 "No entries in local keyring for: $APP_IDENT_NAME"
+    fi
+  fi
 
   # Read private key in memory
   if [[ -z "$private_key" ]]; then
     if [[ -f "$APP_IDENT_FILE_CLEAR" ]]; then
       private_key=$(cat "$APP_IDENT_FILE_CLEAR")
     elif [[ -f "$APP_IDENT_FILE_ENC" ]]; then
+      _log USER "Please enter main password for '$APP_IDENT_NAME' identity"
       private_key=$(
         age --decrypt \
           -o - "$APP_IDENT_FILE_ENC"
-      )
-    # else
-    #   _log WARN "Could not find keypair for ident: $APP_IDENT_NAME"
+      ) || _die 1 "Could not read main password for '$APP_IDENT_NAME' identity or try with --no-keyring"
+    else
+      _log WARN "Could not find keypair for ident: $APP_IDENT_NAME"
     fi
   fi
 
+  # VAlidate private key
   private_key=$(grep '^AGE-SECRET-KEY-' <<<"$private_key")
   [[ -n "$private_key" ]] ||
     _die 1 "Could not read user private key ..."
+
+  # Ask user to save password in keyring ?
+  # if ! $APP_ENABLE_KEYRING; then
+  #   _log HINT "You can save $APP_IDENT_NAME password in local keyring:cryptobox id keyring $APP_IDENT_NAME"
+  # fi
 
   APP_IDENT_PRIV_KEY=$private_key
   APP_IDENT_PUB_KEY=$(echo "$private_key" | age-keygen -y)
 
 }
-
 
 
 # Metadata config
@@ -671,18 +691,139 @@ cli__sync() {
   cb_sync "$@"
 }
 
-cli__pull() {
-  : ",Pull add commit and push"
-  [[ -n "${1:-}" ]] \
-    || _die 1 "You must use an ident to unlock the vault"
-  cb_pull "$@"
+# cli__pull() {
+#   : ",Pull add commit and push"
+#   [[ -n "${1:-}" ]] \
+#     || _die 1 "You must use an ident to unlock the vault"
+#   cb_pull "$@"
+# }
+
+_cli_load_ident_ctx ()
+{
+  export SHIFT=0
+  export APP_CLI_IDENT_NAME=''
+
+  # Check from cli
+  if [[ -n "$APP_IDENTS_PREFERENCE" ]]; then
+    APP_CLI_IDENT_NAME=${APP_IDENTS_PREFERENCE%%,*}
+  fi
+
+  # Check from environment vars
+  if [[ -n "${CRYPTOBOX_IDENT:-}" ]]; then
+    APP_CLI_IDENT_NAME=$CRYPTOBOX_IDENT
+  fi
+  if [[ -n "${CRYPTOBOX_IDENTS:-}" ]]; then
+    APP_CLI_IDENTS_NAME=$CRYPTOBOX_IDENTS
+  fi
+
+  # Check from args
+  if [[ $# -gt 1 ]]; then
+    APP_CLI_IDENT_NAME=$1
+    SHIFT=$(( SHIFT + 1 ))
+  fi
 }
 
+_cli_load_item_ctx ()
+{
+  export SHIFT=0
+  export APP_CLI_CONTEXT=''
+  export APP_CLI_VAULT_NAME=''
+
+  # Check from dir
+  if $APP_SUBPATH_CONTEXT; then
+    if [[ "$APP_SUBPATH" == "/vaults/"* ]]; then
+      local vault_name="${APP_SUBPATH#/vaults/}"
+      if [[ -n "$vault_name" ]]; then
+        APP_CLI_CONTEXT="vault"
+        APP_CLI_VAULT_NAME="${vault_name}"
+      fi
+    fi
+  fi
+
+  # Check argument
+  if [[ -n "${1:-}" ]]; then
+    # APP_CLI_VAULT_NAME=$1
+    local vault_path="$APP_VAULTS_DIR/$1"
+    if [[ -d "$vault_path" ]]; then
+      APP_CLI_VAULT_NAME=$1
+      SHIFT=$(( SHIFT + 1 ))
+    fi
+  fi
+
+  [[ -n "$APP_CLI_VAULT_NAME" ]] || return 1
+}
+
+cli__pull() {
+  : ",Pull vaults"
+
+  # Parse args
+  local cli_vault=''
+  local cli_ident=''
+  if [[ $# -eq 1 ]]; then
+    if _cli_load_item_ctx "${1:-}" ; then
+      cli_vault=$1
+    elif _cli_load_ident_ctx "${1:-}" ; then
+      cli_ident=$1
+    else
+      cli_ident=$1
+    fi
+  elif [[ $# -eq 2 ]]; then
+    cli_vault=$1
+    cli_ident=$2
+  else
+    _cli_load_item_ctx "${1:-}" ; [[ $SHIFT -eq 0 ]] || shift $SHIFT
+    _cli_load_ident_ctx "${1:-}" ; [[ $SHIFT -eq 0 ]] || shift $SHIFT
+    cli_vault=${APP_CLI_VAULT_NAME}
+    cli_ident=${APP_CLI_IDENT_NAME}
+  fi
+
+  # Run action
+  if [[ -n "$cli_vault" ]]; then
+    item_pull vault "$cli_vault" "$cli_ident"
+    _log NOTICE "Pulled one vault: $cli_vault${cli_ident:+ ($cli_ident)}"
+  elif [[ -n "$cli_ident" ]]; then
+    cb_pull "$@"
+    _log NOTICE "Pulled all vaults"
+  else
+    _die 1 "Please check syntax, missing ident or vault"
+  fi
+}
+
+
 cli__push() {
-  : ",Pull add commit and push"
-  [[ -n "${1:-}" ]] \
-    || _die 1 "You must use an ident to unlock the vault"
-  cb_push "$@"
+  : ",Push vaults"
+
+  # Parse args
+  local cli_vault=''
+  local cli_ident=''
+  if [[ $# -eq 1 ]]; then
+    if _cli_load_item_ctx "${1:-}" ; then
+      cli_vault=$1
+    elif _cli_load_ident_ctx "${1:-}" ; then
+      cli_ident=$1
+    else
+      cli_ident=$1
+    fi
+  elif [[ $# -eq 2 ]]; then
+    cli_vault=$1
+    cli_ident=$2
+  else
+    _cli_load_item_ctx "${1:-}" ; [[ $SHIFT -eq 0 ]] || shift $SHIFT
+    _cli_load_ident_ctx "${1:-}" ; [[ $SHIFT -eq 0 ]] || shift $SHIFT
+    cli_vault=${APP_CLI_VAULT_NAME}
+    cli_ident=${APP_CLI_IDENT_NAME}
+  fi
+
+  # Run action
+  if [[ -n "$cli_vault" ]]; then
+    item_push vault "$cli_vault" "$cli_ident"
+    _log NOTICE "Pushed one vault: $cli_vault${cli_ident:+ ($cli_ident)}"
+  elif [[ -n "$cli_ident" ]]; then
+    cb_push "$@"
+    _log NOTICE "Pushed all vaults"
+  else
+    _die 1 "Please check syntax, missing ident or vault"
+  fi
 }
 
 cli__fix() {
@@ -728,8 +869,11 @@ cli_init() {
   # Useful shortcuts
   export VCS_DIR=$(git rev-parse --show-toplevel 2>/dev/null)
   export SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
-  export WORK_DIR=${VCS_DIR:-${SCRIPT_DIR:-$PWD}}
-  export PWD_DIR=${PWD}
+  export APP_WORK_DIR=${VCS_DIR:-${SCRIPT_DIR:-$PWD}}
+  export APP_PWD_DIR=${PWD}
+
+  # Preset values
+  export APP_IDENTS_PREFERENCE=
 }
 
 # Check if all required bin are available in PATH
@@ -776,25 +920,46 @@ cli_options() {
       APP_FORCE=true
       shift
       ;;
+    --keyring | --no-keyring)
+      : ",Enable local keyring"
+      APP_ENABLE_KEYRING=false
+      [[ "$1" == "--keyring" ]] && APP_ENABLE_KEYRING=true
+      _log INFO "Local keyring enabled: $APP_ENABLE_KEYRING"
+      shift
+      ;;
+
+    -i | --ident)
+      : "IDENT,Set current ident, can have multiple values"
+      _log INFO "Ident added: $1"
+      APP_IDENTS_PREFERENCE=${APP_IDENTS_PREFERENCE:+$APP_IDENTS_PREFERENCE,}$1
+      shift
+      ;;
     -V | --version)
       : ",Show version"
       echo "$APP_VERSION"
       _die 0
       ;;
-    -v | -vv | -vvv | --verbose)
-      : "[LEVEL],Set verbosity level"
-      if [[ "$1" == "-vv" ]]; then
-        APP_LOG_LEVEL=DEBUG
-      elif [[ "$1" == "-vvv" ]]; then
-        APP_LOG_LEVEL=TRACE
-      else
-        [[ -n "${2:-}" ]] || _die 1 "Missing log level value"
-        APP_LOG_LEVEL=$2
-        shift 1
-      fi
-      shift 1
-      _log INFO "Log level set to: $APP_LOG_LEVEL"
+    -x | --xtrace)
+      : ",Show debug traces"
+      shift
+      set -x
       ;;
+    -v|-vv|-vvv)
+        : "[LEVEL],Set verbosity level"
+        if [[ -n "${2:-}" ]] && _log_validate_level "${2:-}" 2>/dev/null; then
+          APP_LOG_LEVEL="$2"
+          shift 1
+        elif [[ "$1" == "-v" ]]; then
+          APP_LOG_LEVEL=INFO
+        elif [[ "$1" == "-vv" ]]; then
+          APP_LOG_LEVEL=DEBUG
+        else
+          _log DEBUG "Max logging enabled"          
+          APP_LOG_LEVEL=TRACE
+        fi
+        shift 1
+        _log DEBUG "Log level set to: $APP_LOG_LEVEL"
+        ;;
     -*)
       _die 1 "Unknown option: $1"
       ;;

@@ -43,7 +43,10 @@ _db_ensure_created() {
   _exec git-db init "$file" 2>/dev/null
   
 }
-
+_db_is_open () {
+  local file=${1:-$APP_CONFIG_FILE}
+  [[ -f "$file" ]] || return 1
+}
 
 _cache_db() {
   local target=$APP_CACHE_FILE

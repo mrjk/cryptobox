@@ -60,7 +60,7 @@ keyring_get_best_secret() {
   lib_keyring_is_unlocked || return 0
 
   if [[ "$APP_IDENT_FILE_STATUS" == "encrypted" ]]; then
-    _log INFO "Using keyring password for ident: $ident"
+    _log DEBUG1 "Query local keyring password for ident: $ident"
     secret-tool lookup "${APP_NAME}-ident" "$ident" 2>/dev/null || true
   fi
 
@@ -117,6 +117,26 @@ lib_dir_add_ident() {
 lib_dir_age_pubkeys() {
   _dir_db dump ident | grep age-pub= | sed -E 's/[a-zA-Z0-9\.-]*=//'
 }
+
+
+# Transform ident names to age arguments
+lib_dir_recipient_idents_age_args() {
+  local idents=$@
+
+  local ret=
+  for ident in $idents; do
+    match=$(_dir_db get "ident.$ident.age-pub")
+    if [[ -n "$match" ]]; then
+      ret="${ret:+$ret }$match"
+    else
+      _log WARN "Impossible to get public key of ident: $ident"
+    fi
+  done
+
+  [[ -n "$ret" ]] || return 1
+  _age_build_recipients_args "$ret"
+}
+
 
 # Identity management (internal)
 # =================
@@ -357,8 +377,9 @@ cli__id__new() {
   _dir_db set "ident.$ident.email" "$email"
 
   # Create user vault
-  # lib_vault_new "ident_${ident}" "$ident"
   item_new vault "ident_${ident}" "$ident"
+
+  _log NOTICE "Identity has been created"
 
 }
 
@@ -398,7 +419,7 @@ cli__id__keyring() {
       application "$APP_NAME" \
       "${APP_NAME}-ident" "$ident"
 
-  _log INFO "Identity has been added to keyring"
+  _log NOTICE "Identity has been added to keyring"
 }
 
 
