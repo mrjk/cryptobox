@@ -18,21 +18,21 @@ _log_validate_level ()
 
 # Logging support, with levels
 _log() {
-  # old_setting=${-//[^x]/}; set +x
+  local old_setting=${-//[^x]/}; set +x
 
   local level="${1:-DEBUG}"
   shift 1 || true
 
   # Check log level filter
-  _log_validate_level "$level" "${APP_LOG_LEVEL:-}" || return 0
-
-  local msg=${*}
-  if [[ "$msg" == '-' ]]; then
-    msg="$(cat -)"
+  if _log_validate_level "$level" "${APP_LOG_LEVEL:-}"; then
+    local msg=${*}
+    if [[ "$msg" == '-' ]]; then
+      msg="$(cat -)"
+    fi
+    while read -r -u 3 line; do
+      >&2 printf "%6s: %s\\n" "$level" "${line:- }"
+    done 3<<<"$msg"
   fi
-  while read -r -u 3 line; do
-    >&2 printf "%6s: %s\\n" "$level" "${line:- }"
-  done 3<<<"$msg"
 
   if [[ -n "${old_setting-}" ]]; then set -x; else set +x; fi
 }

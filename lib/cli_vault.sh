@@ -170,31 +170,80 @@ lib_vault_hook__pull_post ()
 
 }
 
+# Function to tar a directory and store as base64 in a variable
+tar_to_base64() {
+    local dir_path="$1"
+    
+    if [ ! -d "$dir_path" ]; then
+        echo "Error: Directory not found: $dir_path" >&2
+        return 1
+    fi
+    
+    local base64_content
+    # base64_content=$(tar -czf - -C "$(dirname "$dir_path")" "$(basename "$dir_path")" | base64 -w 0)
+    base64_content=$(tar -czf - -C "$dir_path" . | base64 -w 0)
+    
+    # echo "$base64_content" | base64 -d | tar -tzf -  >&2
 
+    # Use eval to create a variable with the given name
+    echo "$base64_content"
+}
+
+# Function to untar a base64-encoded tarball stored in a variable
+untar_from_base64() {
+    local output_dir="$1"
+    
+    if [ ! -d "$output_dir" ]; then
+        mkdir -p "$output_dir"
+    fi
+    
+    cat - | base64 -d | tar -xzf - -C "$output_dir"
+}
 
 lib_vault_hook__push_pre ()
 {
   if $_VAULT_IS_GIT ; then
     export GIT_WORKTREE=$_VAULT_DIR
-    local ref_br=main
     local local_br=$(git_curent_branch)
     local br_name="work-$APP_INSTANCE"
+
+    export ref_br=main
     export RESTORE_STASH=false
     export OLD_BRANCH=$local_br
+    export RESTORE_STASH_PATCH=
 
     _log INFO "Local branch name: $br_name"
 
     # Check if workspace is clean, or stash it
-    if [[ -n "$(git -C "$_VAULT_DIR" status -s)" ]]; then
-      _log WARN "Stashing untracked changes in $_VAULT_NAME"
-      git -C "$_VAULT_DIR" stash
-      RESTORE_STASH=true
+    # if [[ -n "$(git -C "$_VAULT_DIR" status -s)" ]]; then
+    if [[ -n "$(git -C "$_VAULT_DIR" clean -n)" ]]; then
+      _log WARN "Saving untracked changes in $_VAULT_NAME"
+
+      
+      local tmp_dir=$(mktemp -d --dry-run)
+      _exec cp -a "$_VAULT_DIR" "$tmp_dir"
+      _exec rm -rf "$tmp_dir/.git"
+      RESTORE_STASH_PATCH=$(tar_to_base64 "$tmp_dir")
+      _exec rm -rf "$tmp_dir"
+
+      # _log WARN "Stashing untracked changes in $_VAULT_NAME"
+
+      # git -C "$_VAULT_DIR" add .
+      # git -C "$_VAULT_DIR" stash
+      # RESTORE_STASH=true
+      # RESTORE_STASH_PATCH=$(git -C "$_VAULT_DIR" show -p)
+      # git -C "$_VAULT_DIR" stash drop
     fi
+
+    _exec git clean -f
 
     if [[ "$local_br" != "$ref_br" ]]; then
       _log INFO "Checking out main before encrypting $_VAULT_DIR"
       _exec git -C "$_VAULT_DIR" checkout "$ref_br"
     fi
+
+    # _exec git -C "$_VAULT_DIR" ll
+
     unset GIT_WORKTREE
   fi
 
@@ -208,14 +257,15 @@ lib_vault_hook__push_post ()
     if [[ "$ref_br" != "$OLD_BRANCH" ]]; then
       git -C "$_VAULT_DIR" checkout "$OLD_BRANCH" || { 
         _log ERROR "Failed to go back on previous branch: $OLD_BRANCH"
-        RESTORE_STASH=false
+        # RESTORE_STASH=false
       }
     fi
 
     # Retore unstaged changes
-    if $RESTORE_STASH ; then
-      _log DEBUG "Restore stash"
-      git  -C "$_VAULT_DIR" stash pop
+    if [[ -n "$RESTORE_STASH_PATCH" ]] ; then
+      _log INFO "Restore local data"
+      echo "$RESTORE_STASH_PATCH" | untar_from_base64 "$_VAULT_DIR"
+      # git  -C "$_VAULT_DIR" stash apply <<<"$RESTORE_STASH_PATCH"
     fi
   fi
 }
@@ -229,12 +279,12 @@ lib_vault_hook__lock_post () {
 lib_vault_hook__new_post () {
 
   # Create vault
-  local vault_dest="$APP_VAULTS_DIR/$_VAULT_NAME"
+  # local vault_dest="$APP_VAULTS_DIR/$_VAULT_NAME"
   # ensure_dir "$vault_dest"
-  git init "$vault_dest"
-  echo "Hello world" >>"$vault_dest/README.md"
+  git init "$_VAULT_DIR" >/dev/null
+  # echo "Hello world" >> "$_VAULT_DIR/README.md"
 
-  _log INFO "New vault created in: $vault_dest"
+  _log INFO "New vault created in: $_VAULT_DIR"
 
 }
 
@@ -308,12 +358,12 @@ cli__vault() {
 
 cli__vault__new() {
   : "NAME [ID...],Create new vault"
-  local _VAULT_NAME=$1
-  shift 1
-  local idents=${@:-}
+  # local _VAULT_NAME=$1
+  # shift 1
+  # local idents=${@:-}
 
   # Create new item
-  item_new vault "$_VAULT_NAME" "$idents"
+  item_new "$1" "$2"
 }
 
 cli__vault__ls() {
@@ -334,7 +384,7 @@ cli__vault__rm() {
 cli__vault__push() {
   : "NAME,Push vault"
   local _VAULT_NAME=$1
-  item_push vault "$_VAULT_NAME"
+  item_push "$_VAULT_NAME"
 }
 
 cli__vault__pull() {
@@ -343,7 +393,7 @@ cli__vault__pull() {
   shift 1
   local ident=${@:-}
 
-  item_pull vault "$_VAULT_NAME" "$ident"
+  item_pull "$_VAULT_NAME" "$ident"
 }
 
 

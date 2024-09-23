@@ -17,6 +17,9 @@ _db_ensure_open() {
   if [[ ! -f "$APP_CONFIG_FILE" ]]; then
 
     if [[ ! -f "$APP_CONFIG_FILE_ENC" ]]; then
+      _log INFO "Config does not exists: $APP_CONFIG_FILE"
+
+      return 1
       _log INFO "Create a new config file: $APP_CONFIG_FILE"
       _exec git-db init "$APP_CONFIG_FILE" #2>/dev/null
     else
@@ -34,10 +37,10 @@ _db_ensure_created() {
     return
   fi
 
-  if [[ -f "${APP_CONFIG_FILE_ENC:-NONE}" ]]; then
-    _log TRACE "Config file already exists and it's encrypted: $APP_CONFIG_FILE_ENC"
-    return
-  fi
+  # if [[ -f "${APP_CONFIG_FILE_ENC:-NONE}" ]]; then
+  #   _log TRACE "Config file already exists and it's encrypted: $APP_CONFIG_FILE_ENC"
+  #   return
+  # fi
 
   _log INFO "Create a new config file: $file"
   _exec git-db init "$file" 2>/dev/null
@@ -77,8 +80,11 @@ _dir_db() {
   if [[ ! -f "$APP_CONFIG_FILE" ]]; then
 
     if [[ ! -f "$APP_CONFIG_FILE_ENC" ]]; then
-      _log INFO "Create a new config file: $APP_CONFIG_FILE"
-      _exec git-db init "$APP_CONFIG_FILE" #2>/dev/null
+      _log INFO "No config exists: $APP_CONFIG_FILE"
+
+      return 0
+      # _log INFO "Create a new config file: $APP_CONFIG_FILE"
+      # _exec git-db init "$APP_CONFIG_FILE" #2>/dev/null
     else
       _die 1 "You must unlock repo first!"
     fi

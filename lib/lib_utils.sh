@@ -8,7 +8,7 @@
 # Ask the user to confirm
 _confirm() {
   local msg="Do you want to continue?"
-  >&2 printf "%s" "${1:-$msg}"
+  >&2 printf "%s\n" "${1:-$msg}"
   >&2 printf "%s" "([y]es or [N]o): "
   export REPLY=
 
@@ -76,7 +76,16 @@ _yaml2json() {
   python3 -c 'import json, sys, yaml ; y = yaml.safe_load(sys.stdin.read()) ; print(json.dumps(y))'
 }
 
-
+# Join lines with separator
+join_lines ()
+{
+  local sep=${1:-,}
+  local ret=
+  while read -r line; do
+    ret="${ret:+$ret,}$line"
+  done < /dev/stdin
+  printf '%s' "$ret"
+}
 
 # Low level helpers
 # =================
@@ -175,7 +184,7 @@ $stop_delimiter"
     else
       _log INFO "File '$file' is already correctly configured"
     fi
-    set +x
+
   else
 
     # TOFIX: Insert before Host *
@@ -293,9 +302,12 @@ is_age_encrypted_file() {
 # Passwordless decrypt
 _age_decrypt_with_ident() {
 
-  [[ -n "$APP_IDENT_PRIV_KEY" ]] || _die 1 "Missing ident private key"
+  [[ -n "$APP_IDENT_PRIV_KEY" ]] || {
+    _log ERROR "Missing ident private key"
+    return 1
+  }
   _log DEBUG "Decrypt with age and internal priv key"
-  age --decrypt \
+  _exec age --decrypt \
     --identity <(echo "$APP_IDENT_PRIV_KEY") "$@"
 
   return $?
