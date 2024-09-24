@@ -211,6 +211,9 @@ cb_init_ctx () {
 cb_init_ident() {
   local ident_name=$1
 
+  # Check status
+  [[ -n "$ident_name" ]] || _die 1 "BUG EMPTY IDENT NAME"
+
   # Avoid multi loading
   [[ "${APP_IDENT_LOADED:-}" != "$ident_name" ]] || return 0
   export APP_IDENT_LOADED="$ident_name"
@@ -241,6 +244,7 @@ cb_init_ident() {
   # User best passowrd
   # export APP_IDENT_PASSWORD=$(keyring_get_best_secret "$APP_IDENT_NAME")
 
+  _log DEBUG "Init ident: $APP_IDENT_NAME"
 }
 
 # Inject private user key password
@@ -249,8 +253,8 @@ cb_init_ident_pass() {
   [[ -z "${APP_IDENT_PRIV_KEY:-}" ]] || return 0
   local private_key=''
 
-  [[ -n "$APP_IDENT_NAME" ]] || {
-    _die 1 "Missing ident"
+  [[ -n "${APP_IDENT_NAME:-}" ]] || {
+    _die 1 "BUG: Missing ident"
   }
     
   # Fetch secret from keyring
@@ -300,6 +304,8 @@ cb_init_ident_pass() {
   APP_IDENT_PRIV_KEY=$private_key
   APP_IDENT_PUB_KEY=$(echo "$private_key" | age-keygen -y)
 
+  _log DEBUG "Init ident secret"
+
 }
 
 
@@ -318,7 +324,6 @@ cb_init () {
     || _die $? "Failed to created directory: $target"
 
   # Ensure targfet dir is git repo
-  # is_dir_git_repo "$target" \
   [[ -d "$target/.git" ]] \
     || {
       _log INFO "Create new empty git repository in: $target"
@@ -338,7 +343,7 @@ cb_init () {
   if [[ "$current_val" == "true" ]] ; then
       _log INFO "Already configured with cryptobox: $target"
   else
-    _exec git -C "$target" config set  --local   "$APP_CONFIG_KEY_PROJECT" true
+    _exec git -C "$target" config set  --local "$APP_CONFIG_KEY_PROJECT" true
     _log INFO "New cryptobox repository created in: $target"
   fi
 
@@ -351,139 +356,65 @@ cb_init () {
 
 }
 
+cb_clone (){
+  local url=$1
+  local dest=${2:-}
 
-# cb_config_encrypt() {
-#   local dest_hash=$APP_CONFIG_FILE_HASH
-#   local _vaulted_file="${APP_STORES_DIR}/${dest_hash}.age"
-#   local vaulted_file=${1:-$_vaulted_file}
+  if [[ -z "$dest" ]]; then
+    dest=${url%%.git}
+    dest=${dest##*/}
+  fi
 
+  _log INFO "Cloning repository '$url'"
 
-#   [[ -f "$APP_CONFIG_FILE" ]] || _die 0 "Already encrypted"
+  cd "$APP_PWD_DIR"
+  git clone "$url" "$dest" 2>&1 | _log INFO - ||
+    _die $? "Failed to clone repository"
 
-#   # local vaulted_file=${APP_STORES_DIR}/$dest_hash.age
+  _exec git -C "$dest" config set --local "$APP_CONFIG_KEY_PROJECT" true
 
-#   all_pub=$(lib_id_get_all_pub_keys)
-#   age_recipient_args=$(_age_build_recipients_args "$all_pub")
-
-#   [[ -n "$age_recipient_args" ]] || _die 1 "Could not build all recipients list"
-#   local ret=
-
-#   # Decrypt the current file, and get checksum
-#   export ret=0
-#   local commited_content_hash=''
-#   commited_content_hash=$(
-#     _age_decrypt_with_ident \
-#     --output - "$vaulted_file" \
-#     | hash_sum - 
-#     ) || _die 1 "Failed to get content hash, please identify yourself"
-#   _log CRIT "YOOOOOOOOOOOO: $ret"
-
-#   # Decrypt local config and get hash
-#   local curr_hash=$(cat "$APP_CONFIG_FILE" | hash_sum - )
-
-#   # Quit if nothing to do
-#   if [[ "$commited_content_hash" == "$curr_hash" ]] ; then
-#     _log INFO "No need to reencrypt config"
-#     # set -x
-#     return 0
-#   fi
-
-#   # shellcheck disable=SC2086
-#   _exec age --encrypt \
-#     $age_recipient_args \
-#     --armor \
-#     --output "$vaulted_file" "$APP_CONFIG_FILE" || \
-#       _die "Failed to encrypt file: $APP_CONFIG_FILE"
+  _log INFO "Cloned repository '$1' in: ${dest}"
+}
 
 
-#   _log INFO "Config updated in vault: $vaulted_file"
-
-# }
-
-# cb_config_decrypt() {
-#   local dest_hash=$APP_CONFIG_FILE_HASH
-#   local _vaulted_file="${APP_STORES_DIR}/${dest_hash}.age"
-#   local vaulted_file=${1:-$_vaulted_file}
-
-#   local dest=$APP_CONFIG_FILE
-#   local tmp_dst="${dest}.new"
-
-#   [[ ! -e "$tmp_dst" ]] || _exec rm "$tmp_dst"
-#   _age_decrypt_with_ident \
-#     --output "$tmp_dst" "$vaulted_file" || \
-#     _die "Failed to decrypt file: $vaulted_file"
-
-#   # Do the change ?
-#   local new_hash=$(cat "$tmp_dst" | hash_sum - )
-#   local curr_hash=$(cat "$dest" | hash_sum - )
-
-#   if [[ "$new_hash" == "$curr_hash" ]] ; then
-#       rm "$tmp_dst"
-#     _log INFO "Config did not changed"
-#     return 0
-#   fi
-
-
-#   if [[ -f "$dest" ]]; then
-
-#     local changes=$(diff -U 0 "$dest" "$tmp_dst" | tail -n+4)
-#     local checksum_excluded=$(grep -v 'checksum = ' <<<"$changes" )
-
-#   #   echo "RESULT1: |$changes|"
-#   #   echo "RESULT2: |$checksum_excluded|"
-#   # set +x
-#     local erase=true
-
-#     if [[ -z "$checksum_excluded" ]]; then
-#       _log INFO "Update only item hash in config, safe to overwrite config"
-#       erase=true
-#     else
-#       _log WARN "Configuration changed for: $dest"
-#       colordiff -u "$tmp_dst" "$dest"
-#       _log WARN "Configuration will be updated:"
-
-#       erase=false
-#       if ! $APP_FORCE; then
-#         _confirm \
-#           "Do you want to add these changes to config?" || \
-#           erase=true
-#       fi
-#     fi
-
-#     if $erase; then
-#       _exec mv "$tmp_dst" "$dest" 
-#       _log INFO "Update $dest config from upstream"
-#     else
-#       _log INFO "Keep $dest config from local"
-#       _exec rm "$tmp_dst"
-#     fi
-#   else
-#     _log INFO "Create new $dest config"
-#     _exec mv "$tmp_dst" "$dest" 
-#   fi
-  
-# }
-
-
-# cb_sync (){
-#   local ident=$1
-#   cb_pull "$ident"
-
-#   if _is_git_diverged "main"; then
-#     cb_fix "$ident"
-#   fi
-
-#   cb_push "$ident"
-
-#   _log INFO "Repo is now fully synced"
-
-# }
-
-cb_pull() {
-  : ",Pull add commit and push"
+cb_unlock (){
   local ident=$1
 
-  local cli_vaults=$(ident_vault_list "$1")
+  _log INFO "Unlocking as: $ident"
+
+  cb_init_ident "$ident"
+  cb_init_ident_pass
+
+  export _VAULT_NAME="CRYPTOBOX"
+  export _VAULT_KIND="vault"
+  export _VAULT_HASH=$(hash_sum "$_VAULT_NAME")
+  export _VAULT_ENC="$APP_STORES_DIR/$_VAULT_HASH.age"
+  export _VAULT_DIR="$APP_VAULTS_DIR/$_VAULT_NAME"
+
+  ensure_dir "$_VAULT_DIR"
+  if ! $APP_DRY; then
+    _age_decrypt_with_ident \
+      --output - "$_VAULT_ENC" | tar -xz -C "$_VAULT_DIR" || \
+      {
+        _exec rmdir "$_VAULT_DIR" 2>/dev/null || true
+        _log ERROR "Failed to unlock: $_VAULT_ENC"
+        _log HINT "Fail reasons:"
+        _log HINT "* Check if $ident password is correct"
+        _log HINT "* Retry with --no-keyring option"
+        return 1
+      }
+  fi
+
+  _log INFO "Cryptobox unlocked with: $ident"
+}
+
+
+cb_pull_all_vaults() {
+  local ident=$1
+
+  local cli_vaults=
+  cli_vaults=$(ident_vault_list "$1") 
+  
 
   for vault in ${cli_vaults//,/ }; do
     _log INFO "Pull vault: $vault"
@@ -493,250 +424,64 @@ cb_pull() {
       _log WARN "Failed to pull vault '$vault'"
     fi
   done
-  return
-
-  # # cb_init_ident "$ident"
-
-  # _log INFO "Start pull"
-
-  # # Update config
-  # _exec git pull --ff -Xtheirs
-  # cb_config_decrypt
-  # items_pull_opened "$ident"
-
-  # if _is_git_diverged "main"; then
-  # _log WARN "Remote branch changed from local branch, please run: '$APP_NAME fix $ident'"
-  # _log INFO "Partial pull with fork, please fix"
-
-  # else
-  # _log INFO "Pulled with success"
-  # fi
 
 }
 
 
-cb_push() {
-  : ",Add commit and push"
+cb_push_all_vaults() {
   local ident=$1
 
 
   local cli_vaults=$(ident_vault_list "$1")
 
   for vault in ${cli_vaults//,/ }; do
-    _log INFO "Push vault: $vault"
+    _log INFO "Encrypted vault: $vault"
     if item_push "$vault" "$cli_ident"; then
-      _log NOTICE "Pushed vault '$vault'"
+      _log NOTICE "Encrypted vault '$vault'"
     else
       _log WARN "Failed to push vault '$vault'"
     fi
   done
-  return
-
-
-  # # Prepare ident
-  # cb_init_ident "$ident"
-  # for vault_name in $(ident_vault_list "$ident"); do
-  #   _log NOTICE "Push vault: $vault_name"
-  #   item_push "$vault_name" "$ident"
-  # done
-  #   _log NOTICE "All encrypted vaults has been updated"
-
-  # # Push local code
-  # if ! is_in_git_clean_stage "stores" \
-  #   || ! is_in_git_clean_stage "identities" \
-  #   ; then
-
-  #   _log INFO "New changes to commit"
-  #   _exec git add stores identities
-  #   _exec git commit --untracked-files=no -m 'update vault' stores identities
-
-  #   if [[ -n "$(git remote -v )" ]]; then
-  #     _exec git push
-  #     _log NOTICE "Changes pushed remotely"
-  #   else
-  #     _log NOTICE "Cryptobox repo updated (no remotes)"
-  #   fi
-  # else
-  #   _log NOTICE "Ok, no changes detected"
-  # fi
 }
 
-
-# cb_fix() {
-#   : ",Fix diverging remote branches"
-
-#   local ident=$1
-#   local local_br="main"
-#   local upstream_br="origin/main"
-#   local upstream_prefix=.merge
-
-#   if ! _is_git_diverged "$local_br"; then
-#     _log INFO "Nothing to fix, try '$APP_NAME pull $ident'"
-#     _die 0 "No need to fix cryptobox"
-#   fi
-
-#   cb_init_ident "$ident"
+cb_pull_remote () {
+  local changes=''
 
 
-#   _log INFO "Compare changes from upstream"
-#   local has_changes=false
-#   local config_changed=''
-#   local idents_changed=''
-#   local stores_changed=''
+  _log INFO "Check for changes"
 
-#   for file in $(git diff --name-only  "$local_br" "$upstream_br"); do
-#     # echo CAHNGED FILE: $file
-
-#     has_changes=true
-
-#     local change=''
-#     if [[ "$file" == "stores/${APP_CONFIG_FILE_HASH}.age" ]]; then
-#       change=config
-#       config_changed=$file
-#     elif [[ "$file" == "stores/"* ]]; then
-#       change=store
-#       stores_changed="${stores_changed}:${file}"
-#     elif [[ "$file" == "identities/"* ]]; then
-#       change=ident
-#       idents_changed="${idents_changed}:${file}"
-#     fi
-#     echo "  Type of change: $change => $file"
-
-#   done
+  changes=$(git -C "${PROJECT_ROOT}" status --porcelain)
+  if [[ -n "$changes" ]]; then
+    _log INFO "Local encrypted changes will be overrided by remote, please push again"
+    git  -C "${PROJECT_ROOT}" checkout .
+    git  -C "${PROJECT_ROOT}" clean -f
+  fi
 
 
-#   _log INFO "Apply changes from upstream"
-#   local _old_store_dir=$APP_STORES_DIR
-#   export APP_STORES_DIR="$upstream_prefix/stores"
+  _exec git -C "${PROJECT_ROOT}" pull -Xtheirs | _log INFO -
 
 
-#   git worktree add "$upstream_prefix" "$upstream_br"
+}
+
+cb_push_remote () {
+  local changes=''
+
+  changes=$(git -C "${PROJECT_ROOT}" status --porcelain)
+  if [[ -z "$changes" ]]; then
+    _log INFO "No changes to add or push"
+    return 0
+  fi
+
+  _log INFO "Commit changes"
+  git -C "${PROJECT_ROOT}" status -sb | _log INFO -
+  git -C "${PROJECT_ROOT}" add identities/ stores/ >/dev/null
+  git -C "${PROJECT_ROOT}" commit -m 'update' identities/ stores/ >/dev/null
 
 
-#   if [[ -n "$config_changed" ]]; then
-#     _log INFO "Updating from upstream config ..."
+  git -C "${PROJECT_ROOT}" push origin | _log INFO -
+  _log INFO "Cryptobox pushed to remote"
 
-#     local target_enc="${APP_CONFIG_FILE}.new.enc"
-#     git show  origin/main:$config_changed > "$target_enc"
-
-#     cb_config_decrypt "$target_enc"
-#     rm "$target_enc"
-#   fi
-
-#   if [[ -n "$idents_changed" ]]; then
-#     _log INFO "Updating from upstream idents ..."
-#     _die 1 "Ident update not implemented yet"
-#   fi
-
-
-#   if [[ -n "$stores_changed" ]]; then
-#     _log INFO "Updating from upstream stores ..."
-
-#     for store in ${stores_changed//:/ }; do
-#       needle=${store##*stores/}
-#       needle=${needle%%.age}
-#       store_name=$(item_name_from_hash "$needle")
-#       store_kind=$(item_kind "$store_name" )
-
-#       # echo "$store_kind"
-#       _log INFO "Updating $store_kind: $store_name"
-#       item_pull "$store_name" || \
-#         _log WARN "Failed to pull vault: $store_name"
-#       echo 
-#     done
-#   fi
-
-#   _log INFO "Cleanup diverging branches"
-#   # set -x
-#   export APP_STORES_DIR=$_old_store_dir
-#   git worktree remove -f   .merge
-
-#   _exec git checkout "$upstream_br"
-#   _exec git branch -D "$local_br"
-#   _exec git checkout -b "$local_br"
-#   _exec git branch --set-upstream-to=$upstream_br "$local_br"
-#   # set +x
-
-
-#   _log INFO "Repo is now fixed :)"
-
-# }
-
-
-# TOFIX
-# =================
-
-
-# cb_lock (){
-#   # set -x
-#   cb_init_ident "$1"
-
-
-#   # Close secrets
-#   local mode='all'
-#   local kinds=${APP_ITEMS_KINDS}
-
-#   for kind in $kinds; do
-
-#     case "$mode" in
-#     all)
-#       for vault in $(item_ident_resources "$APP_IDENT_NAME" "$kind"); do
-#         # _log INFO "Opening vault: $vault"
-#         # "lib_${kind}_lock" "$vault" "$APP_IDENT_NAME"
-#         item_pull "$vault" "$APP_IDENT_NAME"
-#       done
-#       ;;
-#     user)
-#       if item_assert_exists "$kind" "$APP_IDENT_VAULT_NAME" ; then
-#         _log INFO "Locking user vault for: $APP_IDENT_NAME"
-#         # "lib_${kind}_lock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
-#         item_pull "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
-#       fi
-#       ;;
-#     esac
-#   done
-
-
-#   # Close config
-#   cb_config_encrypt
-
-# }
-
-
-# cb_unlock(){
-#   cb_init_ident "$1"
-
-#   _log DEBUG "Unlock global config with ident: $APP_IDENT_NAME"
-
-#   # Decrypt metadata
-#   cb_config_decrypt
-
-#   # Open secrets
-#   local mode='all'
-#   local kinds=${APP_ITEMS_KINDS}
-
-#   for kind in $kinds; do
-
-#     case "$mode" in
-#     all)
-#       for vault in $(item_ident_resources "$APP_IDENT_NAME" "$kind"); do
-#         # _log INFO "Opening vault: $vault"
-#         # "lib_${kind}_unlock" "$vault" "$APP_IDENT_NAME"
-#         item_pull "$vault" "$APP_IDENT_NAME"
-#       done
-#       ;;
-#     user)
-#       if item_assert_exists "$kind" "$APP_IDENT_VAULT_NAME" ; then
-#         _log INFO "Unlocking user vault for: $APP_IDENT_NAME"
-#         # "lib_${kind}_unlock" "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
-#         item_pull "$APP_IDENT_VAULT_NAME" "$APP_IDENT_NAME"
-#       fi
-#       ;;
-#     esac
-#   done
-# }
-
-
+}
 
 # CLI General Commands
 # =================
@@ -748,11 +493,43 @@ cli__init() {
   cb_init2 "$target"
 }
 
+cli__clone() {
+  : "URL [PATH],Clone cryptobox repository"
+  local target="${1:-.}"
+
+  cb_clone "$@"
+}
+
 
 cli__conf() {
   : "[ls|add|set|rm|get],Update donfiguration"
   _dir_db "$@"
 }
+
+
+
+cli__ls() {
+  : ",List stores"
+
+  local cli_ident=${1:-$APP_DEFAULT_IDENT_NAME}
+  [[ -n "$cli_ident" ]] \
+    || _die 1 "You must use an ident, please check usage."
+
+  cb_init_ident "$cli_ident"
+
+
+  # item_list_names2
+  # echo ========
+  # # set -x
+  item_ident_resources "$cli_ident"
+
+  # env | sort | grep APP_
+
+}
+
+
+# CLI Workflow Commands
+# =================
 
 cli__lock() {
   : ",Lock all vaults"
@@ -765,18 +542,15 @@ cli__lock() {
 
 cli__unlock() {
   : "ID,Unlock config"
-  [[ -n "${1:-}" ]] \
+
+  
+  local cli_ident=${1:-$APP_DEFAULT_IDENT_NAME}
+  [[ -n "$cli_ident" ]] \
     || _die 1 "You must use an ident to unlock the vault"
-  cb_unlock "$@"
+
+  cb_unlock "$cli_ident"
 }
 
-
-# cli__sync() {
-#   : ",Sync: pull and push"
-#   [[ -n "${1:-}" ]] \
-#     || _die 1 "You must use an ident to unlock the vault"
-#   cb_sync "$@"
-# }
 
 cli__pull() {
   : "IDENT [VAULTS...],Pull vaults"
@@ -784,6 +558,8 @@ cli__pull() {
 
   local cli_ident=$APP_DEFAULT_IDENT_NAME
   local cli_vaults=''
+
+  _db_is_open || _die 1 "Cryptobox is no unlocked, please unlock first"
 
   [[ -n "$APP_DEFAULT_IDENT_NAME" ]] \
     || _die 1 "Missing ident name"
@@ -807,7 +583,10 @@ cli__pull() {
       fi
     done
   elif [[ -n "$cli_ident" ]]; then
-    cb_pull "$cli_ident"
+
+    cb_pull_remote
+
+    cb_pull_all_vaults "$cli_ident"
     _log NOTICE "Pulled all vaults"
   else
     _die 1 "Please check syntax, missing ident or vault"
@@ -821,6 +600,9 @@ cli__push() {
   local cli_ident=$APP_DEFAULT_IDENT_NAME
   local cli_vaults=''
 
+  _db_is_open || _die 1 "Cryptobox is no unlocked, please unlock first"
+
+
   [[ -n "$APP_DEFAULT_IDENT_NAME" ]] \
     || _die 1 "Missing ident name"
 
@@ -830,7 +612,7 @@ cli__push() {
     cli_vaults=$APP_DEFAULT_VAULTS_NAME
   fi
 
-  # Run action
+  # Run actions
   if [[ -n "$cli_vaults" ]]; then
     for vault in ${cli_vaults//,/ }; do
       if item_push "$vault" "$cli_ident"; then
@@ -840,19 +622,16 @@ cli__push() {
       fi
     done
   elif [[ -n "$cli_ident" ]]; then
-    cb_push "$cli_ident"
+    cb_push_all_vaults "$cli_ident"
     # _log NOTICE "Pushed all vaults"
+
+    # Push on remote
+    cb_push_remote
   else
     _die 1 "Please check syntax, missing ident or vault"
   fi
 }
 
-# cli__fix() {
-#   : ",Fix diverging remote branches"
-#   [[ -n "${1:-}" ]] \
-#     || _die 1 "You must use an ident to unlock the vault"
-#   cb_fix "$@"
-# }
 
 # CLI encrypt/decrypt Commands
 # =================
@@ -879,7 +658,6 @@ cli__info() {
   env | sort | grep APP_
 
 }
-
 
 
 # Core App
@@ -952,7 +730,7 @@ cli_options() {
 
     -i | --ident)
       : "IDENT,Set current ident, can have multiple values"
-      _log INFO "Ident added: $2"
+      _log DEBUG "Default ident '$2'"
       APP_IDENTS_PREFERENCE=${APP_IDENTS_PREFERENCE:+$APP_IDENTS_PREFERENCE,}$2
       shift 2
       ;;
@@ -1017,7 +795,11 @@ cli() {
   case "$cmd" in
     init)
       cb_init "$@"
-      _die 0
+      _die $?
+    ;;
+    clone)
+      cb_clone "$@"
+      _die $?
     ;;
     # init2)
     #   cb_init2 "$@"

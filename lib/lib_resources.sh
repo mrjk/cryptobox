@@ -19,6 +19,25 @@ item_hook() {
 }
 
 
+
+# DEPRECATED
+# =================
+
+
+# Get item name from hash
+# item_name_from_hash() {
+#   local needle=$1
+#   local kinds=${2:-$APP_ITEMS_KINDS}
+
+#   for _VAULT_KIND in $kinds; do
+    
+#     _dir_db dump "$_VAULT_KIND." |
+#       grep "store-hash=$needle$" |
+#       sed 's/^'"$_VAULT_KIND"'.//;s/\..*//' |
+#       sort -u
+#   done
+# }
+
 ## Multi _VAULT_KIND functions
 #  ------
 APP_ITEMS_KINDS=""
@@ -33,52 +52,6 @@ ident_vault_list ()
     | sort
 }
 
-
-# List opened vaults
-item_opened_secrets() {
-  local kinds=${1:-$APP_ITEMS_KINDS}
-  local ident=${2:-}
-
-
-  for _VAULT_KIND in $kinds; do
-
-    if [[ -n "$ident" ]]; then
-      local vaults=$(item_ident_resources "$ident"  "$_VAULT_KIND")
-    else
-      local vaults=$(item_list_names "$_VAULT_KIND")
-    fi
-
-    for name in $vaults; do
-      [[ -d "$APP_VAULTS_DIR/$name" ]] && echo "$name"
-    done
-  done
-}
-
-# Sync all items
-items_push_opened (){
-  local ident=$1
-  local kinds=$APP_ITEMS_KINDS
-  # Check all opened vaults
-  for _VAULT_KIND in $kinds; do
-    for vault in $(item_opened_secrets "$_VAULT_KIND" "$ident"); do
-      _log DEBUG "Pushing vault: $vault"
-      item_push "$vault"
-    done
-  done
-}
-
-# Pull all items
-items_pull_opened (){
-  local ident=$1
-  local kinds=$APP_ITEMS_KINDS
-  # Check all opened vaults
-  for _VAULT_KIND in $kinds; do
-    for vault in $(item_opened_secrets "$_VAULT_KIND" "$ident"); do
-      _log DEBUG "Pulling vault: $vault"
-      item_pull "$vault" "$ident"
-    done
-  done
-}
 
 ## Per _VAULT_KIND functions
 #  ------
@@ -98,57 +71,28 @@ item_ident_resources() {
   local ident=$1
   local kinds=${2:-$APP_ITEMS_KINDS}
 
-  for _VAULT_KIND in $kinds; do
+  for kind in ${kinds//,/ }; do
     
-    _dir_db dump "$_VAULT_KIND." |
-      grep "=$ident$" |
-      sed 's/^'"$_VAULT_KIND"'.//;s/\..*//' |
+    _dir_db dump "$kind." |
+      grep "shared=true\|=$ident$" |
+      cut -d'.' -f 2 |
       sort -u
   done
 }
 
-# Get item name from hash
-item_name_from_hash() {
-  local needle=$1
-  local kinds=${2:-$APP_ITEMS_KINDS}
 
-  for _VAULT_KIND in $kinds; do
-    
-    _dir_db dump "$_VAULT_KIND." |
-      grep "store-hash=$needle$" |
-      sed 's/^'"$_VAULT_KIND"'.//;s/\..*//' |
-      sort -u
-  done
-}
-
-# List all resources of _VAULT_KIND
-# item_list_names() {
-#   local _VAULT_KIND=$1
-#   _dir_db dump "$_VAULT_KIND." |
-#     sed 's/^'"$_VAULT_KIND"'.//;s/\..*//' |
-#     sort -u
-# }
-
-# List all resources of _VAULT_KIND
+# List all resources
 item_list_names2() {
   _dir_db dump "vault" |
     cut -d '.' -f 2 |
     sort -u
 }
 
+item_list_names_flat (){
+  item_list_names2 | tr '\n' ' ' | sed 's/,$//'
+}
 
-
-# # Check if a given _VAULT_KIND resource exist
-# item_assert_exists() {
-#   local _VAULT_KIND=$1
-#   local name=$2
-
-#   _log TRACE "Ensure vault '$_VAULT_KIND.$name' exists"
-
-#   item_list_names "$_VAULT_KIND" | grep -q "^$name$"
-#   return $?
-# }
-
+# Check if a given NAME resource exist
 item_assert_exists2() {
   local name=$1
 
@@ -162,62 +106,23 @@ item_assert_exists2() {
 }
 
 
-
-# # Return all recipients ids for a given vault
-# item_recipient_idents() {
-#   local _VAULT_KIND=$1
-#   local _VAULT_NAME=$2
-#   _dir_db get "$_VAULT_KIND.$_VAULT_NAME.recipient" |
-#     sort -u
-# }
-
 # Return all recipients ids for a given vault, comma seprated
 item_recipient_idents2() {
-  local _VAULT_NAME=$1
-
-  local shared=$(_dir_db get "vault.$_VAULT_NAME.shared" 2>/dev/null || echo false)
+  local name=$1
+  local shared=$(_dir_db get "vault.$name.shared" 2>/dev/null || echo false)
 
   # Generate recipient list
   if [[ "$shared" == 'true' ]]; then
     lib_id_list
   else
-    _dir_db get "vault.$_VAULT_NAME.recipient" |
+    _dir_db get "vault.$name.recipient" |
       sort -u
   fi
 }
 
-
-# # Return age pub_keys from recipients DEPRECATED
-# item_recipient_idents_age_args_v1() {
-#   _log WARN "item_recipient_idents_age_args is DEPRECATED"
-#   local _VAULT_KIND=$1
-#   local _VAULT_NAME=$2
-#   local idents=
-#   idents=$(item_recipient_idents "$_VAULT_KIND" "$_VAULT_NAME")
-
-#   _log INFO "Sharing with idents from config: $idents"
-
-#   local ret=
-#   for ident in $idents; do
-#     match=$(_dir_db get "ident.$ident.age-pub")
-#     if [[ -n "$match" ]]; then
-#       ret="${ret:+$ret }$match"
-#     else
-#       _log WARN "Impossible to get public key of ident: $ident"
-#     fi
-#   done
-
-#   [[ -n "$ret" ]] || return 1
-#   _age_build_recipients_args "$ret"
-# }
-
 # Return age pub_keys from recipients
 item_recipient_idents_age_args() {
   local idents=$1
-
-  # idents=$(item_recipient_idents "$_VAULT_KIND" "$_VAULT_NAME")
-
-  # _log INFO "Sharing with idents from config: $idents"
 
   local ret=
   for ident in ${idents//,/ }; do
@@ -236,48 +141,13 @@ item_recipient_idents_age_args() {
 
 
 
-# Item management (public API)
+
+
+# Item loaders
 # =================
-
-
-# item_load_light () {
-#   local vault_kind=$1
-#   local vault_name=$2
-
-#   export _VAULT_KIND=$vault_kind
-#   export _VAULT_NAME=$vault_name
-
-#   export _VAULT_HASH=$(hash_sum "$vault_name") # vault_hash
-#   export _VAULT_ENC="$APP_STORES_DIR/$_VAULT_HASH.age" # vault_enc
-#   export _VAULT_DIR="$APP_VAULTS_DIR/$_VAULT_NAME" # _VAULT_DIR
-
-# }
-
-# item_load () {
-#   item_load_light "$1" "$2"
-
-#   # Assert DB is open
-#   _db_is_open || _die 1 "You must unlock the cryptobox first"
-
-#   export _VAULT_HASH=$(_dir_db get "$_VAULT_KIND.$_VAULT_NAME.store-hash" 2>/dev/null || echo "$_VAULT_HASH") # vault_hash
-#   export _VAULT_ENC="$APP_STORES_DIR/$_VAULT_HASH.age" # vault_enc
-#   export _VAULT_DIR="$APP_VAULTS_DIR/$_VAULT_NAME" # _VAULT_DIR
-
-
-#   # Load hooks: load
-#   item_hook "$_VAULT_KIND" load \
-#     || {
-#       _log ERROR "Failed hook: load for $_VAULT_KIND"
-#       return 1 
-#     }
-# }
-
 
 item_load_new () {
   local vault_name=$1
-
-  # Assert DB is open
-  _db_is_open || _die 1 "You must unlock the cryptobox first"
 
   # Assert item does NOT exists
   if item_assert_exists2 "$vault_name"; then
@@ -297,6 +167,12 @@ item_load_new () {
 # New version, without kind
 item_load_existing () {
   local vault_name=$1
+  # Assert item exists
+  [[ -n "$vault_name" ]]|| {
+    _log HINT "Missing vault argument, please check usage"
+    _log ERROR "Empty vault name, please choose one of: $(item_list_names_flat)"
+    return 1
+  }
 
   # Assert DB is open
   _db_is_open || {
@@ -306,7 +182,7 @@ item_load_existing () {
 
   # Assert item exists
   item_assert_exists2 "$vault_name" || {
-    _log ERROR "Vault '$vault_name' not found in config, please choose one of: $(item_list_names "vault" )"
+    _log ERROR "Vault '$vault_name' not found in config, please choose one of: $(item_list_names_flat)"
     return 1
   }
 
@@ -331,6 +207,10 @@ item_unload () {
   unset ${!_VAULT_*}
 }
 
+
+
+# Initial  config
+# =================
 
 # Create a new init config
 item_new_config (){
@@ -361,20 +241,21 @@ item_new_config (){
 
 }
 
+
+
+# Item API
+# =================
+
+
 # Create a new item in config
-# Asssert item does not already exists
-# Check recipients
-# Create store-hash
-# Add recipients to config
-# Continue if not fails
-# Kind: vault, gitvault ...
 item_new() {
+
+  # Assert DB is open
+  _db_is_open || _die 1 "You must unlock the cryptobox first"
+
   item_load_new "$1" || return $?; shift 1
-
-
   local idents=${@:-}
   local valid=false
-
 
   # HOOK: ${_VAULT_KIND}__new_pre
   item_hook "$_VAULT_KIND" new_pre \
@@ -382,12 +263,6 @@ item_new() {
       _log ERROR "Failed hook: new_pre for $_VAULT_KIND"
       return 1 
     }
-
-  # # Sanity check
-  # item_assert_exists2 "$_VAULT_NAME" && {
-  #   _log INFO "Vault '$_VAULT_NAME' already exists."
-  #   return 0
-  # }
     
   # Check recipients
   [[ -n "$idents" ]] || {
@@ -426,7 +301,6 @@ item_new() {
   _log INFO "Create new $_VAULT_KIND '$_VAULT_NAME' for: $idents"
   _dir_db set "$_VAULT_KIND.$_VAULT_NAME.store-hash" "$_VAULT_HASH"
 
-  # set -x
   # HOOK: ${_VAULT_KIND}__new_post
   item_hook "$_VAULT_KIND" new_post \
     || {
@@ -439,16 +313,8 @@ item_new() {
 
 # Remove an item from config
 item_rm() {
-  item_load "$1" "$2"; shift 2
-
-  # local _VAULT_KIND=$1
-  # local _VAULT_NAME=$2
+  item_load_existing "$1" || return $?; shift 1
   local changed=false
-
-  # Build vars
-  # local vault_hash=$(_dir_db get "$_VAULT_KIND.$_VAULT_NAME.store-hash")
-  # local vault_enc="$APP_STORES_DIR/$vault_hash.age"
-  local _VAULT_DIR="$APP_VAULTS_DIR/$_VAULT_NAME"
 
   # HOOK: ${_VAULT_KIND}__rm_pre
   item_hook "$_VAULT_KIND" rm_pre \
@@ -457,14 +323,11 @@ item_rm() {
       return 1 
     }
 
-
   # Sanity checks
   [[ -n "$_VAULT_HASH" ]] || {
     _log ERROR "Could not get $_VAULT_KIND store hash"
     return 1
   }
-
-  # HOOK: ${_VAULT_KIND}_rm_pre
 
   # Clear encrypted file
   if [[ -f "$_VAULT_ENC" ]]; then
@@ -656,9 +519,6 @@ item_pull (){
     _log ERROR "Could not get vault store-hash"
     return 1
   }
-  # TMP: [[ ! -d "$_VAULT_DIR" ]] || _die 0 "Already opened in $_VAULT_DIR"
-
-
 
   # Ensure you have opened the last version
   local prev_file_ts=$(_cache_db get "vault.$_VAULT_NAME.ts-open" 2>/dev/null || echo '0')
@@ -696,18 +556,10 @@ item_pull (){
     fi
   fi
 
-  # echo "PASS IDENT LOADING"
-  # echo "vault_hash=$vault_hash"
-  # echo "vault_enc=$vault_enc"
-  # echo "_VAULT_DIR=$_VAULT_DIR"
-  # echo "ident=$ident"
-  # echo ""
-
   # Load ident
   _log INFO "Decrypting with ident '$ident'"
   cb_init_ident "$ident"
   cb_init_ident_pass
-# set -x
 
   # HOOK: ${_VAULT_KIND}__pull_pre
   item_hook "$_VAULT_KIND" pull_pre \
@@ -717,8 +569,8 @@ item_pull (){
     }
 
   _log DEBUG "Opening '$_VAULT_ENC' with ident '$ident' in: $_VAULT_DIR"
-  # set -x
 
+  # Decrypt file
   ensure_dir "$_VAULT_DIR"
   if ! $APP_DRY; then
     _age_decrypt_with_ident \
@@ -732,15 +584,6 @@ item_pull (){
         return 1
 
       }
-    # local rc=$?
-
-    # if [[ "$rc" -ne 0 ]]; then
-    #   _exec rmdir "$_VAULT_DIR" 2>/dev/null || true
-    #   _log ERROR "Failed to decrypt file: $_VAULT_ENC"
-    #   return 1
-    # fi
-    
-
   fi
 
   # HOOK: ${_VAULT_KIND}_pull_post
@@ -756,13 +599,11 @@ item_pull (){
 
 
 
-
 # Fech secret from encrypted data
 item_lock (){
   item_load "$1" "$2"; shift 2
 
   item_push "$_VAULT_NAME"
-  # HOOK: ${_VAULT_KIND}_lock_post
   item_hook "$_VAULT_KIND" lock_post \
     || {
       _log ERROR "Failed hook: lock_post for $_VAULT_KIND"
@@ -776,7 +617,6 @@ item_unlock (){
   item_load "$1" "$2"; shift 2
 
   item_pull "$_VAULT_NAME" "$ident"
-
   item_hook "$_VAULT_KIND" unlock_post \
     || {
       _log ERROR "Failed hook: unlock_post for $_VAULT_KIND"

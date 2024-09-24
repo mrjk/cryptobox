@@ -164,7 +164,7 @@ cli__gitvault() {
   clish_parse_opts cli__gitvault "$@"
   set -- "${args[@]}"
 
-  _db_ensure_open
+  _db_is_open || _die 1 "You must unlock cryptobox first"
 
   # Dispatch to sub commands
   clish_dispatch cli__gitvault__ "$@" || _die $?

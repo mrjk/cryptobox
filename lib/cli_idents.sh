@@ -397,7 +397,7 @@ cli__id() {
   clish_parse_opts cli__id "$@"
   set -- "${args[@]}"
 
-  _db_ensure_open
+  _db_is_open || _die 1 "You must unlock cryptobox first"
 
   # Dispatch to sub commands
   clish_dispatch cli__id__ "$@" || _die $?
@@ -454,8 +454,13 @@ cli__id__ls() {
 
 cli__id__keypair() {
   : "NAME,Show identity key pair (require unlock password)"
-  cb_init_ident "$1"
-  cb_init_ident_pass
+
+  local cli_ident=${1:-$APP_DEFAULT_IDENT_NAME}
+  [[ -n "$cli_ident" ]] \
+    || _die 1 "You must use an ident to unlock the vault"
+
+  cb_init_ident "$cli_ident"
+  APP_ENABLE_KEYRING=false cb_init_ident_pass
 
   echo "ident: $APP_IDENT_NAME"
   echo "ident: $APP_IDENT_HASH"
@@ -470,6 +475,12 @@ cli__id__rm() {
 
 cli__id__keyring() {
   : "IDENT,Set ident in local keyring"
+
+  local cli_ident=${1:-$APP_DEFAULT_IDENT_NAME}
+  [[ -n "$cli_ident" ]] \
+    || _die 1 "You must use an ident to unlock the vault"
+
+  cb_init_ident "${cli_ident}"
   lib_ident_store_keyring
   _log NOTICE "Identity has been added to keyring"
 }
