@@ -4,17 +4,17 @@
 # Internal helpers
 # =================
 
-make_default_ident() {
-  local name=$1
-  [[ -f "$APP_USER_IDENTITY_FILE" ]] || {
-    _die 1 "No such identiry: $name"
-  }
-  echo "$name" >"$APP_CURR_ID_FILE"
-}
+# make_default_ident() {
+#   local name=$1
+#   [[ -f "$APP_USER_IDENTITY_FILE" ]] || {
+#     _die 1 "No such identiry: $name"
+#   }
+#   echo "$name" >"$APP_CURR_ID_FILE"
+# }
 
-assert_current_ident() {
-  [[ -n "$APP_CURR_IDENT" ]] || _die 1 "You must setup an ident first"
-}
+# assert_current_ident() {
+#   [[ -n "$APP_CURR_IDENT" ]] || _die 1 "You must setup an ident first"
+# }
 
 lib_keyring_is_unlocked() {
   local closed=
@@ -61,46 +61,40 @@ keyring_get_best_secret() {
 
   lib_keyring_is_unlocked || return 0
 
+  local pubkey=''
+  if _db_is_open; then
+    pubkey=$(lib_ident_pubkey "$ident")
+    _log ERR "pubkey=|$pubkey|"
+  fi
+
   if [[ "$APP_IDENT_FILE_STATUS" == "encrypted" ]]; then
-    _log DEBUG1 "Query local keyring password for ident: $ident"
-    secret-tool lookup "${APP_NAME}-ident" "$ident" 2>/dev/null || true
-  fi
+    local ret=''
+    local loose_mode=false
 
+    if [[ -n "$pubkey" ]]; then
+      _log DEBUG1 "Strict query local keyring password for ident: $ident (with matching public key)"
+      ret=$( secret-tool lookup \
+        "${APP_NAME}-pubkey" "$pubkey" \
+        "${APP_NAME}-ident" "$ident" \
+        2>/dev/null || true)
+    else
+      loose_mode=true
+      _log DEBUG1 "Lose query local keyring password for ident: $ident (without matching public key)"
+      
+      ret=$( secret-tool lookup \
+        "${APP_NAME}-ident" "$ident" \
+        2>/dev/null || true)
+    fi
+
+    if [[ -n "$ret" ]]; then
+      $loose_mode &&
+        _log WARN "Lookup ident passphrase into keyring in lose mode. If decryption fails, try with '--no-keyring' option."
+      printf "%s" "$ret"
+      return
+    fi
+  fi
+  return 1
 }
-
-ensure_file_encrypted() {
-  local file=$1
-  local recipient_name=${2:-$APP_CURR_IDENT}
-  local recipient=$(get_recipiant_id "$recipient_name")
-
-  if is_age_encrypted_file "$file"; then
-    _log DEBUG "File is already encrypted"
-  else
-    _log INFO "Encrypt file: $file for $recipient_name"
-    _exec _age_encrypt_file "$file" "$recipient"
-  fi
-
-}
-
-ensure_file_in_gitattr() {
-  local name=$1
-  local suffix="filter=sops"
-  local pattern="$name $suffix"
-  if grep -q "^$pattern" "$APP_GITATTR_FILE" 2>/dev/null; then
-    _log DEBUG "File is already in $APP_GITATTR_FILE"
-    return 0
-  fi
-  _log INFO "Add file to .gitattributes: $file"
-
-  if ${APP_DRY:-false}; then
-    _log DRY "Update file: $APP_GITATTR_FILE"
-  else
-    _log INFO "Update file: $APP_GITATTR_FILE"
-    echo "$pattern" >>"$APP_GITATTR_FILE"
-  fi
-}
-
-
 
 
 # Store in keyring
@@ -120,8 +114,45 @@ lib_ident_store_keyring () {
     secret-tool store \
       --label="SecretMgr Ident - $APP_IDENT_NAME" \
       application "$APP_NAME" \
+      "${APP_NAME}-pubkey" "$APP_IDENT_PUB_KEY" \
       "${APP_NAME}-ident" "$APP_IDENT_NAME"
 }
+
+
+# ensure_file_encrypted() {
+#   local file=$1
+#   local recipient_name=${2:-$APP_CURR_IDENT}
+#   local recipient=$(get_recipiant_id "$recipient_name")
+
+#   if is_age_encrypted_file "$file"; then
+#     _log DEBUG "File is already encrypted"
+#   else
+#     _log INFO "Encrypt file: $file for $recipient_name"
+#     _exec _age_encrypt_file "$file" "$recipient"
+#   fi
+
+# }
+
+# ensure_file_in_gitattr() {
+#   local name=$1
+#   local suffix="filter=sops"
+#   local pattern="$name $suffix"
+#   if grep -q "^$pattern" "$APP_GITATTR_FILE" 2>/dev/null; then
+#     _log DEBUG "File is already in $APP_GITATTR_FILE"
+#     return 0
+#   fi
+#   _log INFO "Add file to .gitattributes: $file"
+
+#   if ${APP_DRY:-false}; then
+#     _log DRY "Update file: $APP_GITATTR_FILE"
+#   else
+#     _log INFO "Update file: $APP_GITATTR_FILE"
+#     echo "$pattern" >>"$APP_GITATTR_FILE"
+#   fi
+# }
+
+
+
 
 
 
@@ -138,6 +169,13 @@ lib_dir_age_pubkeys() {
   _dir_db dump ident | grep age-pub= | sed -E 's/[a-zA-Z0-9\.-]*=//'
 }
 
+# Return user pubkey from db
+lib_ident_pubkey () {
+  local ident=$1
+  _dir_db get "ident.$ident.age-pub"
+  # _dir_db dump ident | grep age-pub= | sed -E 's/[a-zA-Z0-9\.-]*=//'
+  
+}
 
 # # Transform ident names to age arguments
 # lib_dir_recipient_idents_age_args() {
@@ -179,41 +217,41 @@ lib_dir_recipient_all_idents_age_args() {
 # Identity management (internal)
 # =================
 
-get_recipiant_id() {
-  local name=$1
+# get_recipiant_id() {
+#   local name=$1
 
-  local dest_inv="${APP_INV_DIR}/$name.pub"
-  cat "$dest_inv"
-}
+#   local dest_inv="${APP_INV_DIR}/$name.pub"
+#   cat "$dest_inv"
+# }
 
-get_id_file_of_ident() {
-  local ident=$1
+# get_id_file_of_ident() {
+#   local ident=$1
 
-  local hash=
-  hash=$(_dir_db get "ident.$ident.ident-hash")
+#   local hash=
+#   hash=$(_dir_db get "ident.$ident.ident-hash")
 
-  echo "$APP_IDENT_DIR/$hash.age"
-}
+#   echo "$APP_IDENT_DIR/$hash.age"
+# }
 
-# Load dump into shell
-lib_id_as_vars() {
-  # Reset env
-  # shellcheck disable=SC2086
-  unset ${!db_ident__*} || true
+# # Load dump into shell
+# lib_id_as_vars() {
+#   # Reset env
+#   # shellcheck disable=SC2086
+#   unset ${!db_ident__*} || true
 
-  # Load
-  local db_exc=$(lib_id_dump | _db_to_vars)
-  echo "$db_exc"
-  eval "${db_exc}"
+#   # Load
+#   local db_exc=$(lib_id_dump | _db_to_vars)
+#   echo "$db_exc"
+#   eval "${db_exc}"
 
-}
+# }
 
 # Return all ident pub keys from directory
-lib_id_get_all_pub_keys() {
-  _dir_db dump |
-    grep '^ident\.[a-zA-Z-]*\.age-pub=' |
-    sed 's/.*=//'
-}
+# lib_id_get_all_pub_keys() {
+#   _dir_db dump |
+#     grep '^ident\.[a-zA-Z-]*\.age-pub=' |
+#     sed 's/.*=//'
+# }
 
 # VALIDATED
 # Dump all idents
@@ -479,6 +517,7 @@ cli__id__keyring() {
   local cli_ident=${1:-$APP_DEFAULT_IDENT_NAME}
   [[ -n "$cli_ident" ]] \
     || _die 1 "You must use an ident to unlock the vault"
+
 
   cb_init_ident "${cli_ident}"
   lib_ident_store_keyring

@@ -580,9 +580,8 @@ item_pull (){
         _log ERROR "Failed to decrypt file: $_VAULT_ENC"
         _log HINT "Fail reasons:"
         _log HINT "* Check if $ident password is correct"
-        _log HINT "* Retry with --no-keyring option"
+        # _log HINT "* Retry with --no-keyring option"
         return 1
-
       }
   fi
 

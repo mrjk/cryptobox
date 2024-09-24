@@ -241,9 +241,6 @@ cb_init_ident() {
   export APP_IDENT_VAULT_HASH=$(hash_sum "$APP_IDENT_VAULT_NAME")
   export APP_IDENT_VAULT_FILE_ENC="${APP_STORES_DIR}/${APP_IDENT_VAULT_HASH}.age"
 
-  # User best passowrd
-  # export APP_IDENT_PASSWORD=$(keyring_get_best_secret "$APP_IDENT_NAME")
-
   _log DEBUG "Init ident: $APP_IDENT_NAME"
 }
 
@@ -256,6 +253,9 @@ cb_init_ident_pass() {
   [[ -n "${APP_IDENT_NAME:-}" ]] || {
     _die 1 "BUG: Missing ident"
   }
+
+  # APP_IDENT_PUB_KEY_OLD=$()
+  # set -x
     
   # Fetch secret from keyring
   if $APP_ENABLE_KEYRING; then
@@ -400,7 +400,7 @@ cb_unlock (){
         _log ERROR "Failed to unlock: $_VAULT_ENC"
         _log HINT "Fail reasons:"
         _log HINT "* Check if $ident password is correct"
-        _log HINT "* Retry with --no-keyring option"
+        # _log HINT "* Retry with --no-keyring option"
         return 1
       }
   fi
@@ -448,7 +448,7 @@ cb_pull_remote () {
   local changes=''
 
 
-  _log INFO "Check for changes"
+  _log NOTICE "Check for changes"
 
   changes=$(git -C "${PROJECT_ROOT}" status --porcelain)
   if [[ -n "$changes" ]]; then
@@ -459,6 +459,7 @@ cb_pull_remote () {
 
 
   _exec git -C "${PROJECT_ROOT}" pull -Xtheirs | _log INFO -
+  _log NOTICE "Cryptobox pulled from remote"
 
 
 }
@@ -479,7 +480,7 @@ cb_push_remote () {
 
 
   git -C "${PROJECT_ROOT}" push origin | _log INFO -
-  _log INFO "Cryptobox pushed to remote"
+  _log NOTICE "Cryptobox pushed to remote"
 
 }
 
@@ -551,6 +552,27 @@ cli__unlock() {
   cb_unlock "$cli_ident"
 }
 
+cli__sync() {
+  : "IDENT,Sync cryptobox"
+
+  local cli_ident=${1:-$APP_DEFAULT_IDENT_NAME}
+  [[ -n "$cli_ident" ]] \
+    || _die 1 "You must use an ident to unlock the vault"
+
+  _log NOTICE "Start syncing"
+
+
+  cb_pull_remote
+  cb_pull_all_vaults "$cli_ident"
+  _log NOTICE "Pulled all vaults"
+
+  # Push
+  cb_push_all_vaults "$cli_ident"
+  cb_push_remote
+
+  _log NOTICE "All synced"
+
+}
 
 cli__pull() {
   : "IDENT [VAULTS...],Pull vaults"
@@ -585,9 +607,9 @@ cli__pull() {
   elif [[ -n "$cli_ident" ]]; then
 
     cb_pull_remote
-
     cb_pull_all_vaults "$cli_ident"
     _log NOTICE "Pulled all vaults"
+
   else
     _die 1 "Please check syntax, missing ident or vault"
   fi
